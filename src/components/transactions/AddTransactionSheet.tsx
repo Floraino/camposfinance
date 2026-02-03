@@ -1,10 +1,11 @@
-import { useState, useRef, useEffect } from "react";
-import { X, Camera, Image as ImageIcon, ChevronRight, Loader2, User } from "lucide-react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { X, Camera, Image as ImageIcon, ChevronRight, Loader2, User, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CategoryBadge, categoryConfig, type CategoryType } from "@/components/ui/CategoryBadge";
 import { cn } from "@/lib/utils";
 import { type NewTransaction } from "@/services/transactionService";
 import { getFamilyMembers, type FamilyMember } from "@/services/familyService";
+import { categorizeDescription } from "@/services/categorizationService";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 
@@ -29,18 +30,60 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd }: AddTransactionSh
   const [status, setStatus] = useState<"paid" | "pending">("paid");
   const [isRecurring, setIsRecurring] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
+  const [isCategorizing, setIsCategorizing] = useState(false);
   const [memberId, setMemberId] = useState<string | undefined>(undefined);
   const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>([]);
+  const [manualCategorySet, setManualCategorySet] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
+  const categorizationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
     if (isOpen) {
       loadFamilyMembers();
+      setManualCategorySet(false);
     }
   }, [isOpen]);
+
+  // Auto-categorize when description changes
+  useEffect(() => {
+    if (manualCategorySet || !description || description.length < 3) {
+      return;
+    }
+
+    // Clear previous timeout
+    if (categorizationTimeoutRef.current) {
+      clearTimeout(categorizationTimeoutRef.current);
+    }
+
+    // Debounce categorization
+    categorizationTimeoutRef.current = setTimeout(async () => {
+      setIsCategorizing(true);
+      try {
+        const suggestedCategory = await categorizeDescription(description);
+        if (suggestedCategory && suggestedCategory !== "other") {
+          setCategory(suggestedCategory);
+        }
+      } catch (error) {
+        console.error("Auto-categorization error:", error);
+      } finally {
+        setIsCategorizing(false);
+      }
+    }, 500);
+
+    return () => {
+      if (categorizationTimeoutRef.current) {
+        clearTimeout(categorizationTimeoutRef.current);
+      }
+    };
+  }, [description, manualCategorySet]);
+
+  const handleCategorySelect = (cat: CategoryType) => {
+    setCategory(cat);
+    setManualCategorySet(true);
+  };
 
   const loadFamilyMembers = async () => {
     try {
@@ -148,6 +191,7 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd }: AddTransactionSh
     setStatus("paid");
     setIsRecurring(false);
     setMemberId(undefined);
+    setManualCategorySet(false);
     onClose();
   };
 
@@ -266,14 +310,20 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd }: AddTransactionSh
           
           {/* Category Selection */}
           <div>
-            <label className="text-sm font-medium text-muted-foreground mb-3 block">
+            <label className="text-sm font-medium text-muted-foreground mb-3 flex items-center gap-2">
               Categoria
+              {isCategorizing && (
+                <span className="flex items-center gap-1 text-xs text-accent">
+                  <Sparkles className="w-3 h-3 animate-pulse" />
+                  Detectando...
+                </span>
+              )}
             </label>
             <div className="flex flex-wrap gap-2">
               {(Object.keys(categoryConfig) as CategoryType[]).map((cat) => (
                 <button
                   key={cat}
-                  onClick={() => setCategory(cat)}
+                  onClick={() => handleCategorySelect(cat)}
                   className={cn(
                     "transition-all duration-200",
                     category === cat && "ring-2 ring-primary ring-offset-2 ring-offset-card rounded-full"

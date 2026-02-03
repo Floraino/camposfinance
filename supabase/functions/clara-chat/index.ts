@@ -6,6 +6,59 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+const CATEGORIZE_URL = "https://ldpkatiahdlzbpuvuscd.supabase.co/functions/v1/categorize-transaction";
+
+async function recategorizeTransactions(supabase: any, userId: string, apiKey: string): Promise<{ updated: number; total: number }> {
+  // Get all transactions
+  const { data: transactions, error } = await supabase
+    .from("transactions")
+    .select("id, description, category")
+    .eq("user_id", userId);
+
+  if (error || !transactions || transactions.length === 0) {
+    return { updated: 0, total: 0 };
+  }
+
+  // Send to AI for batch categorization
+  const response = await fetch(CATEGORIZE_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      categorizeAll: true,
+      descriptions: transactions.map((t: any) => ({ id: t.id, description: t.description })),
+    }),
+  });
+
+  if (!response.ok) {
+    return { updated: 0, total: transactions.length };
+  }
+
+  const data = await response.json();
+  const categories: { id: string; category: string }[] = data.categories || [];
+
+  let updated = 0;
+
+  // Update transactions where category changed
+  for (const cat of categories) {
+    const original = transactions.find((t: any) => t.id === cat.id);
+    if (cat.category && original && cat.category !== original.category) {
+      const { error: updateError } = await supabase
+        .from("transactions")
+        .update({ category: cat.category })
+        .eq("id", cat.id);
+
+      if (!updateError) {
+        updated++;
+      }
+    }
+  }
+
+  return { updated, total: transactions.length };
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -48,6 +101,18 @@ serve(async (req) => {
     }
 
     const { messages } = await req.json();
+    const lastMessage = messages[messages.length - 1]?.content?.toLowerCase() || "";
+
+    // Check if user wants to categorize transactions
+    const wantsCategorization = lastMessage.includes("categorizar") || 
+                                lastMessage.includes("categorize") ||
+                                lastMessage.includes("organizar categoria") ||
+                                lastMessage.includes("classificar");
+
+    let categorizationResult: { updated: number; total: number } | null = null;
+    if (wantsCategorization) {
+      categorizationResult = await recategorizeTransactions(supabase, user.id, LOVABLE_API_KEY);
+    }
 
     // Fetch user's transaction data for context
     const now = new Date();
@@ -143,6 +208,14 @@ serve(async (req) => {
       .map((t: any) => `- ${t.description}: R$ ${Math.abs(t.amount).toFixed(2)} (${categoryLabels[t.category] || t.category})`)
       .join("\n");
 
+    // Categorization info if executed
+    const categorizationInfo = categorizationResult 
+      ? `\n\nAÇÃO EXECUTADA - CATEGORIZAÇÃO AUTOMÁTICA:
+- Total de transações analisadas: ${categorizationResult.total}
+- Transações recategorizadas: ${categorizationResult.updated}
+- ${categorizationResult.updated > 0 ? "As categorias foram atualizadas com sucesso!" : "Todas as transações já estavam bem categorizadas."}`
+      : "";
+
     const systemPrompt = `Você é a Clara, uma assistente financeira pessoal amigável e inteligente do CasaClara. Você ajuda famílias brasileiras a gerenciar suas finanças domésticas.
 
 INFORMAÇÕES DO USUÁRIO:
@@ -166,6 +239,7 @@ ${recentTransactions || "Nenhuma transação registrada"}
 
 DESPESAS RECORRENTES:
 ${recurringExpenses.length > 0 ? recurringExpenses.map((t: any) => `- ${t.description}: R$ ${Math.abs(t.amount).toFixed(2)}`).join("\n") : "Nenhuma despesa recorrente"}
+${categorizationInfo}
 
 INSTRUÇÕES:
 1. Seja amigável, use emojis ocasionalmente para tornar a conversa leve
@@ -175,7 +249,8 @@ INSTRUÇÕES:
 5. Use formatação markdown para destacar números importantes
 6. Seja concisa mas informativa
 7. Sempre responda em português brasileiro
-8. Use "**texto**" para destacar valores e informações importantes`;
+8. Use "**texto**" para destacar valores e informações importantes
+9. Se uma ação de categorização foi executada, informe o resultado ao usuário de forma clara e amigável`;
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",

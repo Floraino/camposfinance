@@ -310,7 +310,7 @@ export function AssistantChat() {
       {/* Quick Suggestions */}
       <div className="px-4 py-2 border-t border-border">
         <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-2">
-          {["Como economizar?", "Resumo do mês", "Gastos por categoria", "Comparar com mês passado"].map((suggestion) => (
+          {["Como economizar?", "Resumo do mês", "Categorizar lançamentos", "Comparar com mês passado"].map((suggestion) => (
             <button
               key={suggestion}
               onClick={() => handleSuggestionClick(suggestion)}
