@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { ChevronRight, Moon, Bell, Shield, Users, Download, HelpCircle, LogOut, User, Camera, X, Loader2 } from "lucide-react";
+import { ChevronRight, Moon, Bell, Shield, Users, Download, Upload, HelpCircle, LogOut, User, Camera, X, Loader2 } from "lucide-react";
 import { MobileLayout } from "@/components/layout/MobileLayout";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import { FamilyMembersSheet } from "@/components/settings/FamilyMembersSheet";
 import { ExportReportSheet } from "@/components/settings/ExportReportSheet";
 import { HelpSheet } from "@/components/settings/HelpSheet";
 import { SecuritySheet } from "@/components/settings/SecuritySheet";
+import { ImportCSVSheet } from "@/components/transactions/ImportCSVSheet";
 
 export default function Settings() {
   const { profile, user, signOut } = useAuth();
@@ -22,6 +23,7 @@ export default function Settings() {
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [showFamilyMembers, setShowFamilyMembers] = useState(false);
   const [showExportReport, setShowExportReport] = useState(false);
+  const [showImportCSV, setShowImportCSV] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showSecurity, setShowSecurity] = useState(false);
   
@@ -341,6 +343,21 @@ export default function Settings() {
             </h3>
             <div className="glass-card divide-y divide-border overflow-hidden">
               <button 
+                onClick={() => setShowImportCSV(true)}
+                className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors"
+              >
+                <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
+                  <Upload className="w-5 h-5 text-muted-foreground" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-foreground">Importar CSV</p>
+                  <p className="text-sm text-muted-foreground truncate">
+                    Importar transações de planilha
+                  </p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-muted-foreground" />
+              </button>
+              <button 
                 onClick={() => setShowExportReport(true)}
                 className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors"
               >
@@ -531,6 +548,10 @@ export default function Settings() {
       <SecuritySheet 
         open={showSecurity} 
         onClose={() => setShowSecurity(false)} 
+      />
+      <ImportCSVSheet 
+        isOpen={showImportCSV} 
+        onClose={() => setShowImportCSV(false)} 
       />
     </MobileLayout>
   );
