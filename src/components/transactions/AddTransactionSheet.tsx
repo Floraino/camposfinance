@@ -3,20 +3,12 @@ import { X, Camera, Image as ImageIcon, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CategoryBadge, categoryConfig, type CategoryType } from "@/components/ui/CategoryBadge";
 import { cn } from "@/lib/utils";
+import { type NewTransaction } from "@/services/transactionService";
 
 interface AddTransactionSheetProps {
   isOpen: boolean;
   onClose: () => void;
   onAdd: (transaction: NewTransaction) => void;
-}
-
-export interface NewTransaction {
-  description: string;
-  amount: number;
-  category: CategoryType;
-  paymentMethod: "pix" | "boleto" | "card" | "cash";
-  status: "paid" | "pending";
-  isRecurring: boolean;
 }
 
 const paymentMethods = [
@@ -41,9 +33,9 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd }: AddTransactionSh
       description,
       amount: -Math.abs(parseFloat(amount.replace(",", "."))),
       category,
-      paymentMethod,
+      payment_method: paymentMethod,
       status,
-      isRecurring,
+      is_recurring: isRecurring,
     });
 
     // Reset form
