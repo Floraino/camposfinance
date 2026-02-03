@@ -12,7 +12,7 @@ const navItems: NavItem[] = [
   { icon: Home, label: "Início", path: "/" },
   { icon: Receipt, label: "Gastos", path: "/transactions" },
   { icon: PlusCircle, label: "Novo", path: "/add" },
-  { icon: MessageCircle, label: "Clara", path: "/assistant" },
+  { icon: MessageCircle, label: "Odin", path: "/assistant" },
   { icon: Settings, label: "Ajustes", path: "/settings" },
 ];
 

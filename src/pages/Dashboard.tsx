@@ -147,7 +147,7 @@ export default function Dashboard() {
             <p className="text-sm text-muted-foreground">{greeting()}! 👋</p>
             <h1 className="text-2xl font-bold text-foreground">
               {profile?.display_name || "Casa"}
-              <span className="text-accent">Clara</span>
+              <span className="text-accent">Campos</span>
             </h1>
           </div>
           <button className="w-10 h-10 rounded-full bg-muted flex items-center justify-center relative">
@@ -167,7 +167,7 @@ export default function Dashboard() {
             <Sparkles className="w-6 h-6 text-accent" />
           </div>
           <div className="flex-1 text-left">
-            <p className="text-sm font-medium text-foreground">Dica da Clara</p>
+            <p className="text-sm font-medium text-foreground">Dica do Odin</p>
             <p className="text-xs text-muted-foreground line-clamp-2">
               {transactions.length === 0 
                 ? "Adicione seu primeiro gasto para começar a acompanhar suas finanças!"

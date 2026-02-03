@@ -426,7 +426,7 @@ export default function Settings() {
 
         {/* Version */}
         <p className="text-center text-xs text-muted-foreground pb-4">
-          CasaClara v1.0.0
+          CasaCampos v1.0.0
         </p>
       </div>
 

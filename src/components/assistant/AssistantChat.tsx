@@ -58,7 +58,7 @@ export function AssistantChat() {
         setMessages([{
           id: "1",
           role: "assistant",
-          content: "Olá! Sou a Clara, sua assistente financeira. Como posso te ajudar hoje? 💰",
+          content: "Olá! Sou o Odin, seu assistente financeiro. Como posso te ajudar hoje? 💰",
           timestamp: new Date(),
         }]);
       }
@@ -235,8 +235,8 @@ export function AssistantChat() {
               <Sparkles className="w-5 h-5 text-accent" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-foreground">Clara</h1>
-              <p className="text-xs text-muted-foreground">Sua assistente financeira</p>
+            <h1 className="text-lg font-bold text-foreground">Odin</h1>
+              <p className="text-xs text-muted-foreground">Seu assistente financeiro</p>
             </div>
           </div>
         </div>
@@ -259,8 +259,8 @@ export function AssistantChat() {
             <Sparkles className="w-5 h-5 text-accent" />
           </div>
           <div>
-            <h1 className="text-lg font-bold text-foreground">Clara</h1>
-            <p className="text-xs text-muted-foreground">Sua assistente financeira</p>
+            <h1 className="text-lg font-bold text-foreground">Odin</h1>
+            <p className="text-xs text-muted-foreground">Seu assistente financeiro</p>
           </div>
         </div>
       </div>

@@ -26,8 +26,8 @@ const faqs = [
     answer: "Despesas recorrentes são gastos que acontecem regularmente, como aluguel, contas de luz ou assinaturas. Marcar como recorrente ajuda a visualizar melhor seus gastos fixos.",
   },
   {
-    question: "Como funciona a assistente Clara?",
-    answer: "Clara é nossa assistente de inteligência artificial que ajuda a analisar seus gastos e responder perguntas sobre suas finanças. Acesse ela pelo menu 'Assistente'.",
+    question: "Como funciona o assistente Odin?",
+    answer: "Odin é nosso assistente de inteligência artificial que ajuda a analisar seus gastos e responder perguntas sobre suas finanças. Acesse ele pelo menu 'Assistente'.",
   },
   {
     question: "Posso escanear recibos?",
@@ -71,7 +71,7 @@ export function HelpSheet({ open, onClose }: HelpSheetProps) {
 
         <div className="flex-1 overflow-y-auto p-4 pb-safe">
           <p className="text-muted-foreground mb-4">
-            Perguntas frequentes sobre o CasaClara
+            Perguntas frequentes sobre o CasaCampos
           </p>
           
           <Accordion type="single" collapsible className="space-y-2">
@@ -94,7 +94,7 @@ export function HelpSheet({ open, onClose }: HelpSheetProps) {
           <div className="mt-6 p-4 bg-primary/10 rounded-xl border border-primary/20">
             <p className="font-medium text-foreground mb-1">Precisa de mais ajuda?</p>
             <p className="text-sm text-muted-foreground">
-              Entre em contato conosco pelo email suporte@casaclara.app
+              Entre em contato conosco pelo email suporte@casacampos.app
             </p>
           </div>
         </div>
