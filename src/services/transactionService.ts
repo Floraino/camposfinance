@@ -143,3 +143,58 @@ export async function getMonthlyStats(month?: number, year?: number) {
     transactionCount: transactions.length,
   };
 }
+
+export interface MonthlyExpense {
+  month: string;
+  income: number;
+  expenses: number;
+}
+
+export async function getMonthlyEvolution(months: number = 5): Promise<MonthlyExpense[]> {
+  const now = new Date();
+  const result: MonthlyExpense[] = [];
+  
+  // Get data for the last N months
+  const startDate = new Date(now.getFullYear(), now.getMonth() - months + 1, 1);
+  const endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+  const { data, error } = await supabase
+    .from("transactions")
+    .select("amount, transaction_date")
+    .gte("transaction_date", startDate.toISOString().split("T")[0])
+    .lte("transaction_date", endDate.toISOString().split("T")[0]);
+
+  if (error) throw error;
+
+  const transactions = data || [];
+
+  // Group by month
+  const monthNames = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+  
+  for (let i = 0; i < months; i++) {
+    const targetDate = new Date(now.getFullYear(), now.getMonth() - months + 1 + i, 1);
+    const monthStart = new Date(targetDate.getFullYear(), targetDate.getMonth(), 1);
+    const monthEnd = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0);
+
+    const monthTransactions = transactions.filter(t => {
+      const txDate = new Date(t.transaction_date);
+      return txDate >= monthStart && txDate <= monthEnd;
+    });
+
+    const expenses = monthTransactions
+      .filter(t => t.amount < 0)
+      .reduce((sum, t) => sum + Math.abs(t.amount), 0);
+
+    const income = monthTransactions
+      .filter(t => t.amount > 0)
+      .reduce((sum, t) => sum + t.amount, 0);
+
+    result.push({
+      month: monthNames[targetDate.getMonth()],
+      income,
+      expenses,
+    });
+  }
+
+  return result;
+}

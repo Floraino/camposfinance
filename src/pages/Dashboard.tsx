@@ -9,7 +9,7 @@ import { ReceiptScanner } from "@/components/receipts/ReceiptScanner";
 import { type CategoryType } from "@/components/ui/CategoryBadge";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
-import { getTransactions, addTransaction, getMonthlyStats, type Transaction, type NewTransaction } from "@/services/transactionService";
+import { getTransactions, addTransaction, getMonthlyStats, getMonthlyEvolution, type Transaction, type NewTransaction, type MonthlyExpense } from "@/services/transactionService";
 import { useToast } from "@/hooks/use-toast";
 
 export default function Dashboard() {
@@ -21,6 +21,7 @@ export default function Dashboard() {
   const [showAddSheet, setShowAddSheet] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [monthlyData, setMonthlyData] = useState<MonthlyExpense[]>([]);
   const [stats, setStats] = useState({
     totalExpenses: 0,
     totalIncome: 0,
@@ -35,12 +36,14 @@ export default function Dashboard() {
   const loadData = async () => {
     try {
       setIsLoading(true);
-      const [txs, monthStats] = await Promise.all([
+      const [txs, monthStats, evolution] = await Promise.all([
         getTransactions(),
         getMonthlyStats(),
+        getMonthlyEvolution(5),
       ]);
       setTransactions(txs);
       setStats(monthStats);
+      setMonthlyData(evolution);
     } catch (error) {
       console.error("Error loading data:", error);
       toast({
@@ -58,9 +61,13 @@ export default function Dashboard() {
       const tx = await addTransaction(newTx);
       setTransactions((prev) => [tx, ...prev]);
       
-      // Refresh stats
-      const monthStats = await getMonthlyStats();
+      // Refresh stats and monthly data
+      const [monthStats, evolution] = await Promise.all([
+        getMonthlyStats(),
+        getMonthlyEvolution(5),
+      ]);
       setStats(monthStats);
+      setMonthlyData(evolution);
       
       toast({
         title: "Gasto adicionado!",
@@ -93,15 +100,6 @@ export default function Dashboard() {
       amount,
     }))
     .sort((a, b) => b.amount - a.amount);
-
-  // Mock monthly data (will be replaced with real data later)
-  const monthlyData = [
-    { month: "Set", income: 6500, expenses: 4200 },
-    { month: "Out", income: 6500, expenses: 4800 },
-    { month: "Nov", income: 7200, expenses: 5100 },
-    { month: "Dez", income: 8500, expenses: 6200 },
-    { month: "Jan", income: 6500, expenses: stats.totalExpenses || 4060 },
-  ];
 
   // Map Transaction to UITransaction
   const uiTransactions: UITransaction[] = transactions.map(tx => ({
