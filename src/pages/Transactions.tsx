@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Search, Filter, ChevronDown, Loader2 } from "lucide-react";
 import { MobileLayout } from "@/components/layout/MobileLayout";
 import { TransactionCard, type Transaction as UITransaction } from "@/components/transactions/TransactionCard";
+import { EditTransactionSheet } from "@/components/transactions/EditTransactionSheet";
 import { CategoryBadge, categoryConfig, type CategoryType } from "@/components/ui/CategoryBadge";
 import { cn } from "@/lib/utils";
 import { getTransactions, type Transaction } from "@/services/transactionService";
@@ -15,6 +16,8 @@ export default function Transactions() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<FilterCategory>("all");
   const [showFilters, setShowFilters] = useState(false);
+  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
+  const [showEditSheet, setShowEditSheet] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -36,6 +39,16 @@ export default function Transactions() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleTransactionClick = (tx: Transaction) => {
+    setSelectedTransaction(tx);
+    setShowEditSheet(true);
+  };
+
+  const handleEditClose = () => {
+    setShowEditSheet(false);
+    setSelectedTransaction(null);
   };
 
   const filteredTransactions = transactions.filter((tx) => {
@@ -166,7 +179,11 @@ export default function Transactions() {
               </h3>
               <div className="space-y-3">
                 {txs.map((tx) => (
-                  <TransactionCard key={tx.id} transaction={mapToUI(tx)} />
+                  <TransactionCard 
+                    key={tx.id} 
+                    transaction={mapToUI(tx)} 
+                    onClick={() => handleTransactionClick(tx)}
+                  />
                 ))}
               </div>
             </div>
@@ -183,6 +200,14 @@ export default function Transactions() {
           )}
         </div>
       </div>
+
+      {/* Edit Transaction Sheet */}
+      <EditTransactionSheet
+        isOpen={showEditSheet}
+        transaction={selectedTransaction}
+        onClose={handleEditClose}
+        onUpdate={loadTransactions}
+      />
     </MobileLayout>
   );
 }
