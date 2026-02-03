@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { Bell, ChevronRight, Sparkles, TrendingDown, Wallet, Loader2, ScanLine, Plus, Settings, ChevronLeft } from "lucide-react";
+import { Bell, ChevronRight, TrendingDown, Wallet, Loader2, ScanLine, Plus, Settings, ChevronLeft } from "lucide-react";
+import odinLogo from "@/assets/odin-logo.png";
 import { MobileLayout } from "@/components/layout/MobileLayout";
 import { StatCard } from "@/components/ui/StatCard";
 import { TransactionCard, type Transaction as UITransaction } from "@/components/transactions/TransactionCard";
@@ -239,8 +240,8 @@ export default function Dashboard() {
           onClick={() => navigate("/assistant")}
           className="w-full glass-card p-4 mb-6 flex items-center gap-4 touch-feedback"
         >
-          <div className="w-12 h-12 rounded-2xl bg-accent/20 flex items-center justify-center flex-shrink-0">
-            <Sparkles className="w-6 h-6 text-accent" />
+          <div className="w-12 h-12 rounded-2xl overflow-hidden flex-shrink-0">
+            <img src={odinLogo} alt="Odin" className="w-full h-full object-cover" />
           </div>
           <div className="flex-1 text-left">
             <p className="text-sm font-medium text-foreground">Dica do Odin</p>
