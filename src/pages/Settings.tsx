@@ -187,17 +187,37 @@ export default function Settings() {
         avatarUrl = publicUrl;
       }
 
-      // Update profile in database
-      const { error } = await supabase
+      // Check if profile exists
+      const { data: existingProfile } = await supabase
         .from('profiles')
-        .update({
-          display_name: displayName,
-          avatar_url: avatarUrl,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('user_id', user.id);
+        .select('id')
+        .eq('user_id', user.id)
+        .maybeSingle();
 
-      if (error) throw error;
+      if (existingProfile) {
+        // Update existing profile
+        const { error } = await supabase
+          .from('profiles')
+          .update({
+            display_name: displayName,
+            avatar_url: avatarUrl,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('user_id', user.id);
+
+        if (error) throw error;
+      } else {
+        // Create new profile
+        const { error } = await supabase
+          .from('profiles')
+          .insert({
+            user_id: user.id,
+            display_name: displayName || user.email?.split('@')[0] || 'Usuário',
+            avatar_url: avatarUrl,
+          });
+
+        if (error) throw error;
+      }
 
       toast({
         title: "Perfil atualizado!",
