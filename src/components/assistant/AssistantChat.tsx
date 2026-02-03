@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from "react";
-import { Send, Sparkles, Loader2 } from "lucide-react";
+import { Send, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import odinLogo from "@/assets/odin-logo.png";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import ReactMarkdown from "react-markdown";
@@ -231,8 +232,8 @@ export function AssistantChat() {
       <div className="flex flex-col h-full">
         <div className="px-4 py-4 border-b border-border bg-card/50 backdrop-blur-xl">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center">
-              <Sparkles className="w-5 h-5 text-accent" />
+            <div className="w-10 h-10 rounded-full overflow-hidden bg-card">
+              <img src={odinLogo} alt="Odin" className="w-full h-full object-cover" />
             </div>
             <div>
             <h1 className="text-lg font-bold text-foreground">Odin</h1>
@@ -254,9 +255,9 @@ export function AssistantChat() {
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="px-4 py-4 border-b border-border bg-card/50 backdrop-blur-xl">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center">
-            <Sparkles className="w-5 h-5 text-accent" />
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full overflow-hidden bg-card">
+              <img src={odinLogo} alt="Odin" className="w-full h-full object-cover" />
           </div>
           <div>
             <h1 className="text-lg font-bold text-foreground">Odin</h1>
