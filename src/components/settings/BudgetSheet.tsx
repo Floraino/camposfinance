@@ -1,9 +1,8 @@
 import { useState, useEffect } from "react";
-import { X, Wallet, Calendar } from "lucide-react";
+import { X, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getCurrentBudget, setBudget, type Budget } from "@/services/budgetService";
 import { useToast } from "@/hooks/use-toast";
-import { cn } from "@/lib/utils";
 
 interface BudgetSheetProps {
   isOpen: boolean;
@@ -13,7 +12,6 @@ interface BudgetSheetProps {
 
 export function BudgetSheet({ isOpen, onClose, onBudgetUpdated }: BudgetSheetProps) {
   const [amount, setAmount] = useState("");
-  const [periodType, setPeriodType] = useState<"weekly" | "monthly">("monthly");
   const [currentBudget, setCurrentBudget] = useState<Budget | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
@@ -22,11 +20,11 @@ export function BudgetSheet({ isOpen, onClose, onBudgetUpdated }: BudgetSheetPro
     if (isOpen) {
       loadCurrentBudget();
     }
-  }, [isOpen, periodType]);
+  }, [isOpen]);
 
   const loadCurrentBudget = async () => {
     try {
-      const budget = await getCurrentBudget(periodType);
+      const budget = await getCurrentBudget("monthly");
       setCurrentBudget(budget);
       if (budget) {
         setAmount(budget.amount.toString().replace(".", ","));
@@ -51,10 +49,10 @@ export function BudgetSheet({ isOpen, onClose, onBudgetUpdated }: BudgetSheetPro
 
     setIsLoading(true);
     try {
-      await setBudget(numAmount, periodType);
+      await setBudget(numAmount, "monthly");
       toast({
         title: "Orçamento salvo!",
-        description: `Orçamento ${periodType === "monthly" ? "mensal" : "semanal"} definido com sucesso.`,
+        description: "Orçamento mensal definido com sucesso.",
       });
       onBudgetUpdated?.();
       onClose();
@@ -92,46 +90,13 @@ export function BudgetSheet({ isOpen, onClose, onBudgetUpdated }: BudgetSheetPro
         </div>
         
         <div className="flex items-center justify-between px-4 pb-4 border-b border-border">
-          <h2 className="text-xl font-bold text-foreground">Definir Orçamento</h2>
+          <h2 className="text-xl font-bold text-foreground">Orçamento Mensal</h2>
           <Button variant="ghost" size="icon-sm" onClick={onClose}>
             <X className="w-5 h-5" />
           </Button>
         </div>
         
         <div className="p-4 space-y-6 pb-safe">
-          {/* Period Type Selection */}
-          <div>
-            <label className="text-sm font-medium text-muted-foreground mb-3 block">
-              Período
-            </label>
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                onClick={() => setPeriodType("monthly")}
-                className={cn(
-                  "h-14 rounded-xl border-2 font-medium transition-all duration-200 flex items-center justify-center gap-2",
-                  periodType === "monthly"
-                    ? "border-primary bg-primary/10 text-primary"
-                    : "border-border bg-muted/50 text-muted-foreground"
-                )}
-              >
-                <Calendar className="w-5 h-5" />
-                Mensal
-              </button>
-              <button
-                onClick={() => setPeriodType("weekly")}
-                className={cn(
-                  "h-14 rounded-xl border-2 font-medium transition-all duration-200 flex items-center justify-center gap-2",
-                  periodType === "weekly"
-                    ? "border-primary bg-primary/10 text-primary"
-                    : "border-border bg-muted/50 text-muted-foreground"
-                )}
-              >
-                <Calendar className="w-5 h-5" />
-                Semanal
-              </button>
-            </div>
-          </div>
-
           {/* Current Budget Info */}
           {currentBudget && (
             <div className="glass-card p-4 flex items-center gap-3">
@@ -166,9 +131,7 @@ export function BudgetSheet({ isOpen, onClose, onBudgetUpdated }: BudgetSheetPro
               />
             </div>
             <p className="text-xs text-muted-foreground mt-2">
-              {periodType === "monthly" 
-                ? "Quanto você pode gastar neste mês?" 
-                : "Quanto você pode gastar nesta semana?"}
+              Quanto você pode gastar neste mês?
             </p>
           </div>
           
