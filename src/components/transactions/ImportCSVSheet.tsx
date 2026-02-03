@@ -186,37 +186,74 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
     return isNaN(amount) ? 0 : amount;
   };
 
-  const detectColumns = (headers: string[]): Record<string, number> => {
+  // Check if string looks like a monetary value
+  const looksLikeAmount = (str: string): boolean => {
+    if (!str) return false;
+    const cleaned = str.replace(/[R$\s]/g, '').trim();
+    // Check for number patterns with commas/dots
+    return /^-?\d{1,3}([.,]\d{3})*([.,]\d{1,2})?$/.test(cleaned) || 
+           /^-?\d+([.,]\d{1,2})?$/.test(cleaned);
+  };
+
+  // Check if string looks like a date
+  const looksLikeDate = (str: string): boolean => {
+    if (!str) return false;
+    return /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(str.trim()) ||
+           /^\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}$/.test(str.trim());
+  };
+
+  // Check if string looks like a category
+  const looksLikeCategory = (str: string): boolean => {
+    if (!str) return false;
+    return Object.keys(categoryMapping).includes(str.toLowerCase().trim());
+  };
+
+  // Check if string looks like a payment method
+  const looksLikePayment = (str: string): boolean => {
+    if (!str) return false;
+    return Object.keys(paymentMapping).includes(str.toLowerCase().trim());
+  };
+
+  // Check if string looks like a status
+  const looksLikeStatus = (str: string): boolean => {
+    if (!str) return false;
+    return Object.keys(statusMapping).includes(str.toLowerCase().trim());
+  };
+
+  const detectColumnsByHeader = (headers: string[]): Record<string, number> => {
     const columnMap: Record<string, number> = {};
     const lowerHeaders = headers.map(h => h.toLowerCase().trim());
     
     // Description column
     const descIdx = lowerHeaders.findIndex(h => 
-      h.includes('descri') || h.includes('nome') || h.includes('name') || h === 'descrição' || h === 'description'
+      h.includes('descri') || h.includes('nome') || h.includes('name') || h === 'descrição' || h === 'description' ||
+      h.includes('titulo') || h.includes('título') || h.includes('item') || h.includes('estabelecimento')
     );
     if (descIdx >= 0) columnMap.description = descIdx;
     
     // Amount column
     const amountIdx = lowerHeaders.findIndex(h => 
-      h.includes('valor') || h.includes('amount') || h.includes('quantia') || h.includes('preço') || h.includes('preco')
+      h.includes('valor') || h.includes('amount') || h.includes('quantia') || h.includes('preço') || 
+      h.includes('preco') || h.includes('total') || h.includes('price') || h.includes('custo')
     );
     if (amountIdx >= 0) columnMap.amount = amountIdx;
     
     // Category column
     const catIdx = lowerHeaders.findIndex(h => 
-      h.includes('categ') || h.includes('tipo')
+      h.includes('categ') || h.includes('tipo') || h.includes('type')
     );
     if (catIdx >= 0) columnMap.category = catIdx;
     
     // Date column
     const dateIdx = lowerHeaders.findIndex(h => 
-      h.includes('data') || h.includes('date') || h.includes('dia')
+      h.includes('data') || h.includes('date') || h.includes('dia') || h.includes('quando')
     );
     if (dateIdx >= 0) columnMap.date = dateIdx;
     
     // Payment method column
     const paymentIdx = lowerHeaders.findIndex(h => 
-      h.includes('pagamento') || h.includes('payment') || h.includes('forma') || h.includes('método') || h.includes('metodo')
+      h.includes('pagamento') || h.includes('payment') || h.includes('forma') || 
+      h.includes('método') || h.includes('metodo') || h.includes('meio')
     );
     if (paymentIdx >= 0) columnMap.payment = paymentIdx;
     
@@ -228,23 +265,205 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
     
     // Notes column
     const notesIdx = lowerHeaders.findIndex(h => 
-      h.includes('nota') || h.includes('notes') || h.includes('obs') || h.includes('comentário') || h.includes('comentario')
+      h.includes('nota') || h.includes('notes') || h.includes('obs') || 
+      h.includes('comentário') || h.includes('comentario') || h.includes('detalhe')
     );
     if (notesIdx >= 0) columnMap.notes = notesIdx;
     
     return columnMap;
   };
 
-  const parseRow = (row: string[], columnMap: Record<string, number>): ParsedTransaction | null => {
-    const description = columnMap.description !== undefined ? row[columnMap.description] : '';
-    const amountStr = columnMap.amount !== undefined ? row[columnMap.amount] : '';
+  const detectColumnsByContent = (rows: string[][]): Record<string, number> => {
+    if (rows.length < 2) return {};
     
-    if (!description || !amountStr) {
-      return null;
+    const columnMap: Record<string, number> = {};
+    const dataRows = rows.slice(1, Math.min(6, rows.length)); // Analyze first 5 data rows
+    const numCols = Math.max(...rows.map(r => r.length));
+    
+    const columnScores: { amount: number; date: number; category: number; payment: number; status: number; text: number }[] = [];
+    
+    for (let col = 0; col < numCols; col++) {
+      const scores = { amount: 0, date: 0, category: 0, payment: 0, status: 0, text: 0 };
+      
+      for (const row of dataRows) {
+        const cell = row[col] || '';
+        if (!cell.trim()) continue;
+        
+        if (looksLikeAmount(cell)) scores.amount++;
+        if (looksLikeDate(cell)) scores.date++;
+        if (looksLikeCategory(cell)) scores.category++;
+        if (looksLikePayment(cell)) scores.payment++;
+        if (looksLikeStatus(cell)) scores.status++;
+        // Text that doesn't match other patterns
+        if (!looksLikeAmount(cell) && !looksLikeDate(cell) && cell.length > 2) {
+          scores.text++;
+        }
+      }
+      
+      columnScores.push(scores);
+    }
+    
+    // Find best column for each type (only if score > 0)
+    const usedCols = new Set<number>();
+    
+    // Amount - highest amount score
+    let bestAmountIdx = -1;
+    let bestAmountScore = 0;
+    columnScores.forEach((scores, idx) => {
+      if (scores.amount > bestAmountScore) {
+        bestAmountScore = scores.amount;
+        bestAmountIdx = idx;
+      }
+    });
+    if (bestAmountIdx >= 0 && bestAmountScore > 0) {
+      columnMap.amount = bestAmountIdx;
+      usedCols.add(bestAmountIdx);
+    }
+    
+    // Date - highest date score
+    let bestDateIdx = -1;
+    let bestDateScore = 0;
+    columnScores.forEach((scores, idx) => {
+      if (!usedCols.has(idx) && scores.date > bestDateScore) {
+        bestDateScore = scores.date;
+        bestDateIdx = idx;
+      }
+    });
+    if (bestDateIdx >= 0 && bestDateScore > 0) {
+      columnMap.date = bestDateIdx;
+      usedCols.add(bestDateIdx);
+    }
+    
+    // Category - highest category score
+    let bestCatIdx = -1;
+    let bestCatScore = 0;
+    columnScores.forEach((scores, idx) => {
+      if (!usedCols.has(idx) && scores.category > bestCatScore) {
+        bestCatScore = scores.category;
+        bestCatIdx = idx;
+      }
+    });
+    if (bestCatIdx >= 0 && bestCatScore > 0) {
+      columnMap.category = bestCatIdx;
+      usedCols.add(bestCatIdx);
+    }
+    
+    // Payment - highest payment score
+    let bestPayIdx = -1;
+    let bestPayScore = 0;
+    columnScores.forEach((scores, idx) => {
+      if (!usedCols.has(idx) && scores.payment > bestPayScore) {
+        bestPayScore = scores.payment;
+        bestPayIdx = idx;
+      }
+    });
+    if (bestPayIdx >= 0 && bestPayScore > 0) {
+      columnMap.payment = bestPayIdx;
+      usedCols.add(bestPayIdx);
+    }
+    
+    // Status - highest status score
+    let bestStatusIdx = -1;
+    let bestStatusScore = 0;
+    columnScores.forEach((scores, idx) => {
+      if (!usedCols.has(idx) && scores.status > bestStatusScore) {
+        bestStatusScore = scores.status;
+        bestStatusIdx = idx;
+      }
+    });
+    if (bestStatusIdx >= 0 && bestStatusScore > 0) {
+      columnMap.status = bestStatusIdx;
+      usedCols.add(bestStatusIdx);
+    }
+    
+    // Description - highest text score among unused columns
+    let bestTextIdx = -1;
+    let bestTextScore = 0;
+    columnScores.forEach((scores, idx) => {
+      if (!usedCols.has(idx) && scores.text > bestTextScore) {
+        bestTextScore = scores.text;
+        bestTextIdx = idx;
+      }
+    });
+    if (bestTextIdx >= 0 && bestTextScore > 0) {
+      columnMap.description = bestTextIdx;
+    }
+    
+    return columnMap;
+  };
+
+  const detectColumns = (rows: string[][]): Record<string, number> => {
+    if (rows.length < 1) return {};
+    
+    const headers = rows[0];
+    
+    // First try to detect by header names
+    const headerMap = detectColumnsByHeader(headers);
+    
+    // Then detect by content analysis
+    const contentMap = detectColumnsByContent(rows);
+    
+    // Merge: header detection takes priority, content fills gaps
+    const finalMap: Record<string, number> = { ...contentMap };
+    
+    for (const [key, value] of Object.entries(headerMap)) {
+      if (value !== undefined) {
+        finalMap[key] = value;
+      }
+    }
+    
+    return finalMap;
+  };
+
+  const parseRow = (row: string[], columnMap: Record<string, number>): ParsedTransaction | null => {
+    // Get description - use first text-like column if not mapped
+    let description = '';
+    if (columnMap.description !== undefined) {
+      description = row[columnMap.description] || '';
+    } else {
+      // Try to find a text column that's not used
+      const usedCols = new Set(Object.values(columnMap));
+      for (let i = 0; i < row.length; i++) {
+        if (!usedCols.has(i) && row[i] && row[i].length > 2 && !looksLikeAmount(row[i]) && !looksLikeDate(row[i])) {
+          description = row[i];
+          break;
+        }
+      }
+    }
+    
+    // Get amount
+    let amountStr = '';
+    if (columnMap.amount !== undefined) {
+      amountStr = row[columnMap.amount] || '';
+    } else {
+      // Try to find an amount column
+      for (let i = 0; i < row.length; i++) {
+        if (row[i] && looksLikeAmount(row[i])) {
+          amountStr = row[i];
+          break;
+        }
+      }
+    }
+    
+    // If no description, use first non-empty text cell
+    if (!description) {
+      const usedCols = new Set(Object.values(columnMap));
+      for (let i = 0; i < row.length; i++) {
+        if (!usedCols.has(i) && row[i] && row[i].trim().length > 0 && !looksLikeAmount(row[i])) {
+          description = row[i];
+          break;
+        }
+      }
+    }
+    
+    // If still no description, generate one
+    if (!description) {
+      description = 'Transação importada';
     }
     
     const amount = parseAmount(amountStr);
-    if (amount === 0) {
+    // Allow zero amount entries (some might be legitimate)
+    if (!amountStr && amount === 0) {
       return null;
     }
     
@@ -263,8 +482,8 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
     const notes = columnMap.notes !== undefined ? row[columnMap.notes] : undefined;
     
     return {
-      description: description.substring(0, 255), // Limit length
-      amount: -Math.abs(amount), // Expenses are negative
+      description: description.substring(0, 255),
+      amount: amount > 0 ? -Math.abs(amount) : amount, // Expenses are negative
       category,
       payment_method,
       status,
@@ -294,11 +513,11 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
         throw new Error("Arquivo CSV vazio ou sem dados");
       }
 
-      const headers = rows[0];
-      const columnMap = detectColumns(headers);
+      const columnMap = detectColumns(rows);
       
-      if (columnMap.description === undefined || columnMap.amount === undefined) {
-        throw new Error("CSV deve ter colunas de descrição e valor");
+      // No longer require description/amount columns - we'll detect them from content
+      if (Object.keys(columnMap).length === 0) {
+        throw new Error("Não foi possível detectar as colunas do CSV");
       }
 
       const { data: { user } } = await supabase.auth.getUser();
@@ -403,16 +622,16 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
         <div className="p-4 space-y-6 pb-safe">
           {/* Instructions */}
           <div className="glass-card p-4">
-            <h3 className="font-semibold text-foreground mb-2">Formato esperado</h3>
+            <h3 className="font-semibold text-foreground mb-2">Detecção automática</h3>
             <p className="text-sm text-muted-foreground mb-3">
-              O CSV deve conter pelo menos as colunas:
+              O sistema detecta automaticamente as colunas do seu CSV:
             </p>
             <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
-              <li><strong>Descrição</strong> (obrigatório)</li>
-              <li><strong>Valor</strong> (obrigatório)</li>
-              <li>Data (opcional - usa hoje se vazio)</li>
-              <li>Categoria (opcional)</li>
-              <li>Forma de pagamento (opcional)</li>
+              <li><strong>Valor</strong> - detectado pelo formato numérico</li>
+              <li><strong>Descrição</strong> - texto que não é valor ou data</li>
+              <li><strong>Data</strong> - se não encontrada, usa data de hoje</li>
+              <li><strong>Categoria</strong> - detectada automaticamente (ex: Alimentação)</li>
+              <li><strong>Forma de pagamento</strong> - detectada se presente</li>
             </ul>
           </div>
 
@@ -484,12 +703,19 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
 
           {/* Example */}
           <div className="glass-card p-4">
-            <h3 className="font-semibold text-foreground mb-2">Exemplo de CSV</h3>
+            <h3 className="font-semibold text-foreground mb-2">Exemplos de CSV</h3>
+            <p className="text-xs text-muted-foreground mb-2">Com colunas nomeadas:</p>
+            <pre className="text-xs text-muted-foreground bg-muted/50 p-3 rounded-lg overflow-x-auto mb-3">
+{`Item;Total;Data
+Supermercado;150,00;01/02/2026
+Uber;25,50;
+Conta de Luz;89,90;15/02/2026`}
+            </pre>
+            <p className="text-xs text-muted-foreground mb-2">Ou sem cabeçalho (detecta pelo conteúdo):</p>
             <pre className="text-xs text-muted-foreground bg-muted/50 p-3 rounded-lg overflow-x-auto">
-{`Descrição;Valor;Data;Categoria
-Supermercado;150,00;01/02/2026;Alimentação
-Uber;25,50;;Transporte
-Conta de Luz;89,90;15/02/2026;Contas`}
+{`Supermercado;150,00
+Farmácia;45,90
+Cinema;32,00`}
             </pre>
           </div>
 
