@@ -8,18 +8,85 @@ const corsHeaders = {
 
 const CATEGORIZE_URL = "https://ldpkatiahdlzbpuvuscd.supabase.co/functions/v1/categorize-transaction";
 
+// Transaction management functions
+async function addTransaction(supabase: any, userId: string, data: any): Promise<{ success: boolean; message: string; transaction?: any }> {
+  const { data: tx, error } = await supabase
+    .from("transactions")
+    .insert({
+      user_id: userId,
+      description: data.description,
+      amount: data.amount,
+      category: data.category || "other",
+      payment_method: data.payment_method || "pix",
+      status: data.status || "paid",
+      is_recurring: data.is_recurring || false,
+      transaction_date: data.transaction_date || new Date().toISOString().split("T")[0],
+      notes: data.notes,
+      member_id: data.member_id,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    return { success: false, message: `Erro ao adicionar: ${error.message}` };
+  }
+  return { success: true, message: "Transação adicionada com sucesso!", transaction: tx };
+}
+
+async function updateTransaction(supabase: any, id: string, data: any): Promise<{ success: boolean; message: string }> {
+  const updates: any = {};
+  if (data.description) updates.description = data.description;
+  if (data.amount !== undefined) updates.amount = data.amount;
+  if (data.category) updates.category = data.category;
+  if (data.payment_method) updates.payment_method = data.payment_method;
+  if (data.status) updates.status = data.status;
+  if (data.is_recurring !== undefined) updates.is_recurring = data.is_recurring;
+  if (data.transaction_date) updates.transaction_date = data.transaction_date;
+  if (data.notes !== undefined) updates.notes = data.notes;
+
+  const { error } = await supabase
+    .from("transactions")
+    .update(updates)
+    .eq("id", id);
+
+  if (error) {
+    return { success: false, message: `Erro ao atualizar: ${error.message}` };
+  }
+  return { success: true, message: "Transação atualizada com sucesso!" };
+}
+
+async function deleteTransaction(supabase: any, id: string): Promise<{ success: boolean; message: string }> {
+  const { error } = await supabase
+    .from("transactions")
+    .delete()
+    .eq("id", id);
+
+  if (error) {
+    return { success: false, message: `Erro ao excluir: ${error.message}` };
+  }
+  return { success: true, message: "Transação excluída com sucesso!" };
+}
+
+async function searchTransactions(supabase: any, query: string): Promise<any[]> {
+  const { data } = await supabase
+    .from("transactions")
+    .select("id, description, amount, category, transaction_date")
+    .ilike("description", `%${query}%`)
+    .order("transaction_date", { ascending: false })
+    .limit(10);
+  
+  return data || [];
+}
+
 async function recategorizeTransactions(supabase: any, userId: string, apiKey: string): Promise<{ updated: number; total: number }> {
-  // Get all transactions
   const { data: transactions, error } = await supabase
     .from("transactions")
-    .select("id, description, category")
-    .eq("user_id", userId);
+    .select("id, description, category");
 
   if (error || !transactions || transactions.length === 0) {
     return { updated: 0, total: 0 };
   }
 
-  // Send to AI for batch categorization
   const response = await fetch(CATEGORIZE_URL, {
     method: "POST",
     headers: {
@@ -40,8 +107,6 @@ async function recategorizeTransactions(supabase: any, userId: string, apiKey: s
   const categories: { id: string; category: string }[] = data.categories || [];
 
   let updated = 0;
-
-  // Update transactions where category changed
   for (const cat of categories) {
     const original = transactions.find((t: any) => t.id === cat.id);
     if (cat.category && original && cat.category !== original.category) {
@@ -57,6 +122,29 @@ async function recategorizeTransactions(supabase: any, userId: string, apiKey: s
   }
 
   return { updated, total: transactions.length };
+}
+
+// Parse AI response for function calls
+function parseAIFunctionCall(content: string): { action: string; params: any } | null {
+  const functionPatterns = [
+    { regex: /\[ADICIONAR:\s*(.+?)\]/i, action: "add" },
+    { regex: /\[EDITAR:\s*(.+?)\]/i, action: "update" },
+    { regex: /\[EXCLUIR:\s*(.+?)\]/i, action: "delete" },
+    { regex: /\[BUSCAR:\s*(.+?)\]/i, action: "search" },
+  ];
+
+  for (const pattern of functionPatterns) {
+    const match = content.match(pattern.regex);
+    if (match) {
+      try {
+        const params = JSON.parse(match[1]);
+        return { action: pattern.action, params };
+      } catch {
+        return { action: pattern.action, params: match[1] };
+      }
+    }
+  }
+  return null;
 }
 
 serve(async (req) => {
@@ -77,7 +165,6 @@ serve(async (req) => {
       throw new Error("Supabase configuration is missing");
     }
 
-    // Get authorization header
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
       return new Response(JSON.stringify({ error: "Missing authorization header" }), {
@@ -86,10 +173,8 @@ serve(async (req) => {
       });
     }
 
-    // Create Supabase client with user's token
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     
-    // Verify user token
     const token = authHeader.replace("Bearer ", "");
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
     
@@ -103,7 +188,7 @@ serve(async (req) => {
     const { messages } = await req.json();
     const lastMessage = messages[messages.length - 1]?.content?.toLowerCase() || "";
 
-    // Check if user wants to categorize transactions
+    // Check for categorization request
     const wantsCategorization = lastMessage.includes("categorizar") || 
                                 lastMessage.includes("categorize") ||
                                 lastMessage.includes("organizar categoria") ||
@@ -114,42 +199,36 @@ serve(async (req) => {
       categorizationResult = await recategorizeTransactions(supabase, user.id, LOVABLE_API_KEY);
     }
 
-    // Fetch user's transaction data for context
+    // Fetch transaction data
     const now = new Date();
     const currentMonth = now.getMonth();
     const currentYear = now.getFullYear();
     
-    // Get current month transactions
     const startOfMonth = new Date(currentYear, currentMonth, 1).toISOString().split("T")[0];
     const endOfMonth = new Date(currentYear, currentMonth + 1, 0).toISOString().split("T")[0];
     
     const { data: currentMonthTxs } = await supabase
       .from("transactions")
       .select("*")
-      .eq("user_id", user.id)
       .gte("transaction_date", startOfMonth)
       .lte("transaction_date", endOfMonth)
       .order("transaction_date", { ascending: false });
 
-    // Get last month transactions for comparison
     const startOfLastMonth = new Date(currentYear, currentMonth - 1, 1).toISOString().split("T")[0];
     const endOfLastMonth = new Date(currentYear, currentMonth, 0).toISOString().split("T")[0];
     
     const { data: lastMonthTxs } = await supabase
       .from("transactions")
       .select("*")
-      .eq("user_id", user.id)
       .gte("transaction_date", startOfLastMonth)
       .lte("transaction_date", endOfLastMonth);
 
-    // Get user profile
     const { data: profile } = await supabase
       .from("profiles")
       .select("display_name")
       .eq("user_id", user.id)
       .single();
 
-    // Calculate statistics
     const transactions = currentMonthTxs || [];
     const lastMonthTransactions = lastMonthTxs || [];
     
@@ -165,7 +244,6 @@ serve(async (req) => {
       .filter((t: any) => t.amount < 0)
       .reduce((sum: number, t: any) => sum + Math.abs(t.amount), 0);
 
-    // Group by category
     const byCategory: Record<string, number> = {};
     transactions
       .filter((t: any) => t.amount < 0)
@@ -180,10 +258,8 @@ serve(async (req) => {
         lastMonthByCategory[t.category] = (lastMonthByCategory[t.category] || 0) + Math.abs(t.amount);
       });
 
-    // Find recurring expenses
     const recurringExpenses = transactions.filter((t: any) => t.is_recurring);
 
-    // Build context for AI
     const monthNames = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
     const currentMonthName = monthNames[currentMonth];
     const lastMonthName = monthNames[currentMonth === 0 ? 11 : currentMonth - 1];
@@ -204,11 +280,10 @@ serve(async (req) => {
       .map(([cat, amount]) => `- ${categoryLabels[cat] || cat}: R$ ${amount.toFixed(2)}`)
       .join("\n");
 
-    const recentTransactions = transactions.slice(0, 10)
-      .map((t: any) => `- ${t.description}: R$ ${Math.abs(t.amount).toFixed(2)} (${categoryLabels[t.category] || t.category})`)
+    const recentTransactions = transactions.slice(0, 15)
+      .map((t: any) => `- ID: ${t.id.slice(0, 8)} | ${t.description}: R$ ${Math.abs(t.amount).toFixed(2)} (${categoryLabels[t.category] || t.category}) - ${t.transaction_date}`)
       .join("\n");
 
-    // Categorization info if executed
     const categorizationInfo = categorizationResult 
       ? `\n\nAÇÃO EXECUTADA - CATEGORIZAÇÃO AUTOMÁTICA:
 - Total de transações analisadas: ${categorizationResult.total}
@@ -216,12 +291,12 @@ serve(async (req) => {
 - ${categorizationResult.updated > 0 ? "As categorias foram atualizadas com sucesso!" : "Todas as transações já estavam bem categorizadas."}`
       : "";
 
-    const systemPrompt = `Você é o Odin, um assistente financeiro pessoal amigável e inteligente do CasaCampos. Você ajuda famílias brasileiras a gerenciar suas finanças domésticas.
+    const systemPrompt = `Você é o Odin, um assistente financeiro pessoal inteligente do CasaCampos. Você ajuda famílias brasileiras a gerenciar suas finanças domésticas.
 
 INFORMAÇÕES DO USUÁRIO:
 - Nome: ${profile?.display_name || "Usuário"}
 
-DADOS FINANCEIROS DE ${currentMonthName.toUpperCase()}:
+DADOS FINANCEIROS DE ${currentMonthName.toUpperCase()} (COMPARTILHADOS PELA FAMÍLIA):
 - Total de gastos: R$ ${totalExpenses.toFixed(2)}
 - Total de receitas: R$ ${totalIncome.toFixed(2)}
 - Saldo: R$ ${(totalIncome - totalExpenses).toFixed(2)}
@@ -234,23 +309,38 @@ COMPARAÇÃO COM ${lastMonthName.toUpperCase()}:
 GASTOS POR CATEGORIA:
 ${categoryBreakdown || "Nenhum gasto registrado ainda"}
 
-TRANSAÇÕES RECENTES:
+TRANSAÇÕES RECENTES (com IDs para referência):
 ${recentTransactions || "Nenhuma transação registrada"}
 
 DESPESAS RECORRENTES:
 ${recurringExpenses.length > 0 ? recurringExpenses.map((t: any) => `- ${t.description}: R$ ${Math.abs(t.amount).toFixed(2)}`).join("\n") : "Nenhuma despesa recorrente"}
 ${categorizationInfo}
 
+SUAS CAPACIDADES DE GERENCIAMENTO:
+Você pode executar ações diretamente nos lançamentos. Para isso, use os seguintes comandos em sua resposta:
+
+1. ADICIONAR LANÇAMENTO:
+   [ADICIONAR: {"description": "Nome", "amount": -100, "category": "food", "payment_method": "pix", "status": "paid"}]
+   
+2. EDITAR LANÇAMENTO (use o ID das transações listadas):
+   [EDITAR: {"id": "abc12345", "description": "Novo nome", "amount": -150}]
+   
+3. EXCLUIR LANÇAMENTO:
+   [EXCLUIR: {"id": "abc12345"}]
+
+Categorias válidas: food, transport, entertainment, health, education, shopping, bills, other
+Formas de pagamento: pix, boleto, card, cash
+Status: paid, pending
+
 INSTRUÇÕES:
-1. Seja amigável, use emojis ocasionalmente para tornar a conversa leve
-2. Baseie suas respostas nos dados reais do usuário
-3. Ofereça dicas práticas e personalizadas de economia
-4. Se o usuário não tem dados, incentive-o a registrar seus gastos
-5. Use formatação markdown para destacar números importantes
-6. Seja concisa mas informativa
-7. Sempre responda em português brasileiro
-8. Use "**texto**" para destacar valores e informações importantes
-9. Se uma ação de categorização foi executada, informe o resultado ao usuário de forma clara e amigável`;
+1. Seja amigável, use emojis ocasionalmente
+2. Baseie suas respostas nos dados reais da família
+3. Quando o usuário pedir para adicionar, editar ou excluir lançamentos, USE OS COMANDOS ACIMA
+4. Sempre confirme a ação executada ao usuário
+5. Use formatação markdown para destacar valores
+6. Sempre responda em português brasileiro
+7. Se o usuário disser "apaga", "exclui", "remove" + descrição, encontre o ID correspondente e execute
+8. Valores de gastos devem ser NEGATIVOS (ex: -100 para um gasto de R$100)`;
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -289,7 +379,75 @@ INSTRUÇÕES:
       });
     }
 
-    return new Response(response.body, {
+    // Process streaming response and execute any function calls
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error("No reader available");
+    }
+
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    let fullContent = "";
+
+    const stream = new ReadableStream({
+      async start(controller) {
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            const chunk = decoder.decode(value, { stream: true });
+            controller.enqueue(value);
+            
+            // Accumulate content for function parsing
+            const lines = chunk.split("\n");
+            for (const line of lines) {
+              if (line.startsWith("data: ") && line !== "data: [DONE]") {
+                try {
+                  const json = JSON.parse(line.slice(6));
+                  const content = json.choices?.[0]?.delta?.content;
+                  if (content) fullContent += content;
+                } catch { /* ignore parse errors */ }
+              }
+            }
+          }
+
+          // After streaming completes, check for function calls
+          const functionCall = parseAIFunctionCall(fullContent);
+          if (functionCall) {
+            let result: { success: boolean; message: string };
+            
+            switch (functionCall.action) {
+              case "add":
+                result = await addTransaction(supabase, user.id, functionCall.params);
+                break;
+              case "update":
+                result = await updateTransaction(supabase, functionCall.params.id, functionCall.params);
+                break;
+              case "delete":
+                result = await deleteTransaction(supabase, functionCall.params.id);
+                break;
+              default:
+                result = { success: false, message: "Ação não reconhecida" };
+            }
+
+            // Send action result as final message
+            const actionResult = `\n\ndata: ${JSON.stringify({
+              choices: [{
+                delta: { content: `\n\n✅ ${result.message}` }
+              }]
+            })}\n\n`;
+            controller.enqueue(encoder.encode(actionResult));
+          }
+
+          controller.close();
+        } catch (error) {
+          controller.error(error);
+        }
+      },
+    });
+
+    return new Response(stream, {
       headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
     });
   } catch (e) {

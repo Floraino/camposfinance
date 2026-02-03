@@ -270,7 +270,7 @@ export default function Dashboard() {
           <div>
             <p className="text-sm text-muted-foreground">{greeting()}! 👋</p>
             <h1 className="text-2xl font-bold text-foreground">
-              {profile?.display_name || "Casa"}
+              {profile?.display_name?.split(" ")[0] || "Casa"}
               <span className="text-accent">Campos</span>
             </h1>
           </div>
