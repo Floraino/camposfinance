@@ -1,16 +1,19 @@
 import { useState, useEffect } from "react";
-import { Bell, ChevronRight, Sparkles, TrendingDown, Wallet, Loader2, ScanLine, Plus } from "lucide-react";
+import { Bell, ChevronRight, Sparkles, TrendingDown, Wallet, Loader2, ScanLine, Plus, Settings } from "lucide-react";
 import { MobileLayout } from "@/components/layout/MobileLayout";
 import { StatCard } from "@/components/ui/StatCard";
 import { TransactionCard, type Transaction as UITransaction } from "@/components/transactions/TransactionCard";
 import { ExpensePieChart, MonthlyBarChart } from "@/components/charts/ExpenseCharts";
 import { AddTransactionSheet } from "@/components/transactions/AddTransactionSheet";
 import { ReceiptScanner } from "@/components/receipts/ReceiptScanner";
+import { BudgetSheet } from "@/components/settings/BudgetSheet";
 import { type CategoryType } from "@/components/ui/CategoryBadge";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { getTransactions, addTransaction, getMonthlyStats, getMonthlyEvolution, type Transaction, type NewTransaction, type MonthlyExpense } from "@/services/transactionService";
+import { getCurrentBudget, type Budget } from "@/services/budgetService";
 import { useToast } from "@/hooks/use-toast";
+import { Progress } from "@/components/ui/progress";
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -20,8 +23,10 @@ export default function Dashboard() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [showAddSheet, setShowAddSheet] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
+  const [showBudgetSheet, setShowBudgetSheet] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [monthlyData, setMonthlyData] = useState<MonthlyExpense[]>([]);
+  const [budget, setBudget] = useState<Budget | null>(null);
   const [stats, setStats] = useState({
     totalExpenses: 0,
     totalIncome: 0,
@@ -36,14 +41,16 @@ export default function Dashboard() {
   const loadData = async () => {
     try {
       setIsLoading(true);
-      const [txs, monthStats, evolution] = await Promise.all([
+      const [txs, monthStats, evolution, currentBudget] = await Promise.all([
         getTransactions(),
         getMonthlyStats(),
         getMonthlyEvolution(5),
+        getCurrentBudget("monthly"),
       ]);
       setTransactions(txs);
       setStats(monthStats);
       setMonthlyData(evolution);
+      setBudget(currentBudget);
     } catch (error) {
       console.error("Error loading data:", error);
       toast({
@@ -111,6 +118,7 @@ export default function Dashboard() {
     paymentMethod: tx.payment_method,
     status: tx.status,
     isRecurring: tx.is_recurring,
+    memberName: tx.member_name,
   }));
 
   const greeting = () => {
@@ -215,6 +223,45 @@ export default function Dashboard() {
           />
         </div>
 
+        {/* Budget Progress */}
+        <button 
+          onClick={() => setShowBudgetSheet(true)}
+          className="w-full glass-card p-4 mb-6 touch-feedback"
+        >
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Wallet className="w-5 h-5 text-primary" />
+              <h3 className="font-semibold text-foreground">Orçamento do Mês</h3>
+            </div>
+            <Settings className="w-4 h-4 text-muted-foreground" />
+          </div>
+          {budget ? (
+            <>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm text-muted-foreground">
+                  {formatCurrency(stats.totalExpenses)} de {formatCurrency(budget.amount)}
+                </span>
+                <span className="text-sm font-medium text-foreground">
+                  {Math.min(Math.round((stats.totalExpenses / budget.amount) * 100), 100)}%
+                </span>
+              </div>
+              <Progress 
+                value={Math.min((stats.totalExpenses / budget.amount) * 100, 100)} 
+                className="h-2"
+              />
+              {stats.totalExpenses > budget.amount && (
+                <p className="text-xs text-destructive mt-2">
+                  Você ultrapassou o orçamento em {formatCurrency(stats.totalExpenses - budget.amount)}
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Toque para definir seu orçamento mensal
+            </p>
+          )}
+        </button>
+
         {/* Expense Distribution */}
         {pieChartData.length > 0 && (
           <div className="glass-card p-4 mb-6">
@@ -279,6 +326,13 @@ export default function Dashboard() {
         isOpen={showScanner}
         onClose={() => setShowScanner(false)}
         onTransactionAdded={loadData}
+      />
+
+      {/* Budget Sheet */}
+      <BudgetSheet
+        isOpen={showBudgetSheet}
+        onClose={() => setShowBudgetSheet(false)}
+        onBudgetUpdated={loadData}
       />
     </MobileLayout>
   );

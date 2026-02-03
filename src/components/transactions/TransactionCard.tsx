@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 import { CategoryIcon, type CategoryType } from "@/components/ui/CategoryBadge";
-import { Check, Clock, RefreshCw } from "lucide-react";
+import { Check, Clock, RefreshCw, User } from "lucide-react";
 
 export interface Transaction {
   id: string;
@@ -11,7 +11,7 @@ export interface Transaction {
   paymentMethod: "pix" | "boleto" | "card" | "cash";
   status: "paid" | "pending";
   isRecurring?: boolean;
-  member?: string;
+  memberName?: string;
 }
 
 interface TransactionCardProps {
@@ -20,7 +20,7 @@ interface TransactionCardProps {
 }
 
 export function TransactionCard({ transaction, onClick }: TransactionCardProps) {
-  const { description, amount, date, category, status, isRecurring } = transaction;
+  const { description, amount, date, category, status, isRecurring, memberName } = transaction;
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat("pt-BR", {
@@ -51,8 +51,14 @@ export function TransactionCard({ transaction, onClick }: TransactionCardProps) 
             <RefreshCw className="w-3 h-3 text-muted-foreground flex-shrink-0" />
           )}
         </div>
-        <div className="flex items-center gap-2 mt-0.5">
+        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
           <span className="text-xs text-muted-foreground">{formatDate(date)}</span>
+          {memberName && (
+            <span className="flex items-center gap-1 text-xs text-primary">
+              <User className="w-3 h-3" />
+              {memberName}
+            </span>
+          )}
           {status === "pending" && (
             <span className="flex items-center gap-1 text-xs text-warning">
               <Clock className="w-3 h-3" />
