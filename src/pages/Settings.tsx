@@ -1,6 +1,9 @@
-import { ChevronRight, Moon, Bell, Shield, Users, Download, HelpCircle, LogOut } from "lucide-react";
+import { ChevronRight, Moon, Bell, Shield, Users, Download, HelpCircle, LogOut, User } from "lucide-react";
 import { MobileLayout } from "@/components/layout/MobileLayout";
 import { Switch } from "@/components/ui/switch";
+import { useAuth } from "@/hooks/useAuth";
+import { useNavigate } from "react-router-dom";
+import { useToast } from "@/hooks/use-toast";
 
 const settingsGroups = [
   {
@@ -64,6 +67,19 @@ const settingsGroups = [
 ];
 
 export default function Settings() {
+  const { profile, user, signOut } = useAuth();
+  const navigate = useNavigate();
+  const { toast } = useToast();
+
+  const handleSignOut = async () => {
+    await signOut();
+    toast({
+      title: "Até logo!",
+      description: "Você saiu da sua conta.",
+    });
+    navigate("/auth");
+  };
+
   return (
     <MobileLayout>
       <div className="px-4 pt-safe">
@@ -74,12 +90,20 @@ export default function Settings() {
 
         {/* User Card */}
         <div className="glass-card p-4 mb-6 flex items-center gap-4">
-          <div className="w-14 h-14 rounded-full bg-accent/20 flex items-center justify-center">
-            <span className="text-2xl">🏠</span>
+          <div className="w-14 h-14 rounded-full bg-accent/20 flex items-center justify-center overflow-hidden">
+            {profile?.avatar_url ? (
+              <img src={profile.avatar_url} alt="Avatar" className="w-full h-full object-cover" />
+            ) : (
+              <User className="w-7 h-7 text-accent" />
+            )}
           </div>
           <div className="flex-1">
-            <h2 className="font-semibold text-foreground">Família Silva</h2>
-            <p className="text-sm text-muted-foreground">3 membros • Plano Gratuito</p>
+            <h2 className="font-semibold text-foreground">
+              {profile?.display_name || "Usuário"}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {user?.email}
+            </p>
           </div>
           <ChevronRight className="w-5 h-5 text-muted-foreground" />
         </div>
@@ -119,7 +143,10 @@ export default function Settings() {
           ))}
 
           {/* Logout */}
-          <button className="w-full flex items-center justify-center gap-3 p-4 text-destructive font-medium">
+          <button 
+            onClick={handleSignOut}
+            className="w-full flex items-center justify-center gap-3 p-4 text-destructive font-medium"
+          >
             <LogOut className="w-5 h-5" />
             Sair da Conta
           </button>

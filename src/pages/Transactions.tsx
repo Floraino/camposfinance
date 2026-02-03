@@ -1,134 +1,44 @@
-import { useState } from "react";
-import { Search, Filter, ChevronDown } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Search, Filter, ChevronDown, Loader2 } from "lucide-react";
 import { MobileLayout } from "@/components/layout/MobileLayout";
-import { TransactionCard, type Transaction } from "@/components/transactions/TransactionCard";
+import { TransactionCard, type Transaction as UITransaction } from "@/components/transactions/TransactionCard";
 import { CategoryBadge, categoryConfig, type CategoryType } from "@/components/ui/CategoryBadge";
 import { cn } from "@/lib/utils";
-
-const allTransactions: Transaction[] = [
-  {
-    id: "1",
-    description: "Supermercado Extra",
-    amount: -287.45,
-    date: "2024-02-03",
-    category: "food",
-    paymentMethod: "card",
-    status: "paid",
-  },
-  {
-    id: "2",
-    description: "Conta de Luz - Enel",
-    amount: -189.90,
-    date: "2024-02-02",
-    category: "bills",
-    paymentMethod: "pix",
-    status: "paid",
-    isRecurring: true,
-  },
-  {
-    id: "3",
-    description: "Aluguel",
-    amount: -1500.00,
-    date: "2024-02-01",
-    category: "bills",
-    paymentMethod: "boleto",
-    status: "paid",
-    isRecurring: true,
-  },
-  {
-    id: "4",
-    description: "Internet Vivo",
-    amount: -129.90,
-    date: "2024-02-01",
-    category: "bills",
-    paymentMethod: "pix",
-    status: "pending",
-    isRecurring: true,
-  },
-  {
-    id: "5",
-    description: "Uber",
-    amount: -32.50,
-    date: "2024-01-31",
-    category: "transport",
-    paymentMethod: "pix",
-    status: "paid",
-  },
-  {
-    id: "6",
-    description: "iFood - Pizza",
-    amount: -78.90,
-    date: "2024-01-30",
-    category: "food",
-    paymentMethod: "card",
-    status: "paid",
-  },
-  {
-    id: "7",
-    description: "Netflix",
-    amount: -39.90,
-    date: "2024-01-30",
-    category: "leisure",
-    paymentMethod: "card",
-    status: "paid",
-    isRecurring: true,
-  },
-  {
-    id: "8",
-    description: "Spotify",
-    amount: -21.90,
-    date: "2024-01-30",
-    category: "leisure",
-    paymentMethod: "card",
-    status: "paid",
-    isRecurring: true,
-  },
-  {
-    id: "9",
-    description: "Farmácia Drogasil",
-    amount: -67.80,
-    date: "2024-01-29",
-    category: "health",
-    paymentMethod: "pix",
-    status: "paid",
-  },
-  {
-    id: "10",
-    description: "Combustível - Shell",
-    amount: -180.00,
-    date: "2024-01-28",
-    category: "transport",
-    paymentMethod: "card",
-    status: "paid",
-  },
-  {
-    id: "11",
-    description: "Cinema",
-    amount: -56.00,
-    date: "2024-01-27",
-    category: "leisure",
-    paymentMethod: "pix",
-    status: "paid",
-  },
-  {
-    id: "12",
-    description: "Curso Udemy",
-    amount: -27.90,
-    date: "2024-01-26",
-    category: "education",
-    paymentMethod: "card",
-    status: "paid",
-  },
-];
+import { getTransactions, type Transaction } from "@/services/transactionService";
+import { useToast } from "@/hooks/use-toast";
 
 type FilterCategory = "all" | CategoryType;
 
 export default function Transactions() {
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<FilterCategory>("all");
   const [showFilters, setShowFilters] = useState(false);
+  const { toast } = useToast();
 
-  const filteredTransactions = allTransactions.filter((tx) => {
+  useEffect(() => {
+    loadTransactions();
+  }, []);
+
+  const loadTransactions = async () => {
+    try {
+      setIsLoading(true);
+      const data = await getTransactions();
+      setTransactions(data);
+    } catch (error) {
+      console.error("Error loading transactions:", error);
+      toast({
+        title: "Erro ao carregar",
+        description: "Não foi possível carregar os gastos",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const filteredTransactions = transactions.filter((tx) => {
     const matchesSearch = tx.description.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCategory = selectedCategory === "all" || tx.category === selectedCategory;
     return matchesSearch && matchesCategory;
@@ -141,11 +51,11 @@ export default function Transactions() {
     }).format(value);
   };
 
-  const totalFiltered = filteredTransactions.reduce((acc, tx) => acc + tx.amount, 0);
+  const totalFiltered = filteredTransactions.reduce((acc, tx) => acc + Number(tx.amount), 0);
 
   // Group by date
   const groupedTransactions = filteredTransactions.reduce((groups, tx) => {
-    const date = new Date(tx.date).toLocaleDateString("pt-BR", {
+    const date = new Date(tx.transaction_date).toLocaleDateString("pt-BR", {
       weekday: "long",
       day: "numeric",
       month: "long",
@@ -156,6 +66,28 @@ export default function Transactions() {
     groups[date].push(tx);
     return groups;
   }, {} as Record<string, Transaction[]>);
+
+  // Map to UI format
+  const mapToUI = (tx: Transaction): UITransaction => ({
+    id: tx.id,
+    description: tx.description,
+    amount: Number(tx.amount),
+    date: tx.transaction_date,
+    category: tx.category,
+    paymentMethod: tx.payment_method,
+    status: tx.status,
+    isRecurring: tx.is_recurring,
+  });
+
+  if (isLoading) {
+    return (
+      <MobileLayout>
+        <div className="flex items-center justify-center h-[60vh]">
+          <Loader2 className="w-8 h-8 text-primary animate-spin" />
+        </div>
+      </MobileLayout>
+    );
+  }
 
   return (
     <MobileLayout>
@@ -234,7 +166,7 @@ export default function Transactions() {
               </h3>
               <div className="space-y-3">
                 {txs.map((tx) => (
-                  <TransactionCard key={tx.id} transaction={tx} />
+                  <TransactionCard key={tx.id} transaction={mapToUI(tx)} />
                 ))}
               </div>
             </div>
@@ -242,7 +174,11 @@ export default function Transactions() {
 
           {filteredTransactions.length === 0 && (
             <div className="text-center py-12">
-              <p className="text-muted-foreground">Nenhum gasto encontrado</p>
+              <p className="text-muted-foreground">
+                {transactions.length === 0 
+                  ? "Nenhum gasto registrado ainda" 
+                  : "Nenhum gasto encontrado"}
+              </p>
             </div>
           )}
         </div>
