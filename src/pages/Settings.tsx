@@ -1,75 +1,26 @@
-import { ChevronRight, Moon, Bell, Shield, Users, Download, HelpCircle, LogOut, User } from "lucide-react";
+import { useState, useRef } from "react";
+import { ChevronRight, Moon, Bell, Shield, Users, Download, HelpCircle, LogOut, User, Camera, X, Loader2 } from "lucide-react";
 import { MobileLayout } from "@/components/layout/MobileLayout";
 import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
-
-const settingsGroups = [
-  {
-    title: "Preferências",
-    items: [
-      {
-        icon: Moon,
-        label: "Tema Escuro",
-        description: "Ativado por padrão",
-        hasSwitch: true,
-        enabled: true,
-      },
-      {
-        icon: Bell,
-        label: "Notificações",
-        description: "Lembretes de contas",
-        hasSwitch: true,
-        enabled: true,
-      },
-    ],
-  },
-  {
-    title: "Família",
-    items: [
-      {
-        icon: Users,
-        label: "Membros da Casa",
-        description: "Gerenciar quem usa o app",
-        hasArrow: true,
-      },
-    ],
-  },
-  {
-    title: "Dados",
-    items: [
-      {
-        icon: Download,
-        label: "Exportar Relatório",
-        description: "PDF ou Excel",
-        hasArrow: true,
-      },
-      {
-        icon: Shield,
-        label: "Segurança",
-        description: "Backup automático ativado",
-        hasArrow: true,
-      },
-    ],
-  },
-  {
-    title: "Suporte",
-    items: [
-      {
-        icon: HelpCircle,
-        label: "Ajuda",
-        description: "Perguntas frequentes",
-        hasArrow: true,
-      },
-    ],
-  },
-];
+import { supabase } from "@/integrations/supabase/client";
 
 export default function Settings() {
   const { profile, user, signOut } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
+  
+  const [showEditProfile, setShowEditProfile] = useState(false);
+  const [displayName, setDisplayName] = useState(profile?.display_name || "");
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(profile?.avatar_url || null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [darkMode, setDarkMode] = useState(true);
+  const [notifications, setNotifications] = useState(true);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSignOut = async () => {
     await signOut();
@@ -78,6 +29,114 @@ export default function Settings() {
       description: "Você saiu da sua conta.",
     });
     navigate("/auth");
+  };
+
+  const handleAvatarSelect = async (file: File) => {
+    if (!file.type.startsWith("image/")) {
+      toast({
+        title: "Arquivo inválido",
+        description: "Por favor, selecione uma imagem",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsUploading(true);
+
+    try {
+      // Show preview
+      const previewUrl = URL.createObjectURL(file);
+      setAvatarPreview(previewUrl);
+
+      // Upload to Supabase Storage
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${user?.id}/avatar.${fileExt}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('avatars')
+        .upload(fileName, file, { upsert: true });
+
+      if (uploadError) throw uploadError;
+
+      // Get public URL
+      const { data: { publicUrl } } = supabase.storage
+        .from('avatars')
+        .getPublicUrl(fileName);
+
+      // Add cache buster to force refresh
+      setAvatarPreview(`${publicUrl}?t=${Date.now()}`);
+    } catch (error) {
+      console.error("Error uploading avatar:", error);
+      toast({
+        title: "Erro ao enviar foto",
+        description: "Tente novamente",
+        variant: "destructive",
+      });
+      setAvatarPreview(profile?.avatar_url || null);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleSaveProfile = async () => {
+    if (!user) return;
+    
+    setIsSaving(true);
+
+    try {
+      // Get the avatar URL from storage if uploaded
+      let avatarUrl = profile?.avatar_url;
+      
+      // Check if there's a new avatar uploaded
+      const { data: files } = await supabase.storage
+        .from('avatars')
+        .list(user.id);
+
+      if (files && files.length > 0) {
+        const { data: { publicUrl } } = supabase.storage
+          .from('avatars')
+          .getPublicUrl(`${user.id}/${files[0].name}`);
+        avatarUrl = publicUrl;
+      }
+
+      // Update profile in database
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          display_name: displayName,
+          avatar_url: avatarUrl,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('user_id', user.id);
+
+      if (error) throw error;
+
+      toast({
+        title: "Perfil atualizado!",
+        description: "Suas informações foram salvas.",
+      });
+
+      setShowEditProfile(false);
+      
+      // Reload the page to refresh profile data
+      window.location.reload();
+    } catch (error) {
+      console.error("Error saving profile:", error);
+      toast({
+        title: "Erro ao salvar",
+        description: "Não foi possível atualizar o perfil",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleExportReport = () => {
+    toast({
+      title: "Em breve!",
+      description: "Funcionalidade de exportação será adicionada em breve.",
+    });
   };
 
   return (
@@ -89,7 +148,14 @@ export default function Settings() {
         </header>
 
         {/* User Card */}
-        <div className="glass-card p-4 mb-6 flex items-center gap-4">
+        <button 
+          onClick={() => {
+            setDisplayName(profile?.display_name || "");
+            setAvatarPreview(profile?.avatar_url || null);
+            setShowEditProfile(true);
+          }}
+          className="w-full glass-card p-4 mb-6 flex items-center gap-4 touch-feedback"
+        >
           <div className="w-14 h-14 rounded-full bg-accent/20 flex items-center justify-center overflow-hidden">
             {profile?.avatar_url ? (
               <img src={profile.avatar_url} alt="Avatar" className="w-full h-full object-cover" />
@@ -97,7 +163,7 @@ export default function Settings() {
               <User className="w-7 h-7 text-accent" />
             )}
           </div>
-          <div className="flex-1">
+          <div className="flex-1 text-left">
             <h2 className="font-semibold text-foreground">
               {profile?.display_name || "Usuário"}
             </h2>
@@ -106,41 +172,120 @@ export default function Settings() {
             </p>
           </div>
           <ChevronRight className="w-5 h-5 text-muted-foreground" />
-        </div>
+        </button>
 
         {/* Settings Groups */}
         <div className="space-y-6 pb-4">
-          {settingsGroups.map((group) => (
-            <div key={group.title}>
-              <h3 className="text-sm font-medium text-muted-foreground mb-3 px-1">
-                {group.title}
-              </h3>
-              <div className="glass-card divide-y divide-border overflow-hidden">
-                {group.items.map((item, index) => (
-                  <button
-                    key={index}
-                    className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors"
-                  >
-                    <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
-                      <item.icon className="w-5 h-5 text-muted-foreground" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-foreground">{item.label}</p>
-                      <p className="text-sm text-muted-foreground truncate">
-                        {item.description}
-                      </p>
-                    </div>
-                    {item.hasSwitch && (
-                      <Switch checked={item.enabled} />
-                    )}
-                    {item.hasArrow && (
-                      <ChevronRight className="w-5 h-5 text-muted-foreground" />
-                    )}
-                  </button>
-                ))}
+          {/* Preferences */}
+          <div>
+            <h3 className="text-sm font-medium text-muted-foreground mb-3 px-1">
+              Preferências
+            </h3>
+            <div className="glass-card divide-y divide-border overflow-hidden">
+              <div className="flex items-center gap-4 p-4">
+                <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
+                  <Moon className="w-5 h-5 text-muted-foreground" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-foreground">Tema Escuro</p>
+                  <p className="text-sm text-muted-foreground truncate">
+                    {darkMode ? "Ativado" : "Desativado"}
+                  </p>
+                </div>
+                <Switch checked={darkMode} onCheckedChange={setDarkMode} />
+              </div>
+              <div className="flex items-center gap-4 p-4">
+                <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
+                  <Bell className="w-5 h-5 text-muted-foreground" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-foreground">Notificações</p>
+                  <p className="text-sm text-muted-foreground truncate">
+                    Lembretes de contas
+                  </p>
+                </div>
+                <Switch checked={notifications} onCheckedChange={setNotifications} />
               </div>
             </div>
-          ))}
+          </div>
+
+          {/* Family */}
+          <div>
+            <h3 className="text-sm font-medium text-muted-foreground mb-3 px-1">
+              Família
+            </h3>
+            <div className="glass-card overflow-hidden">
+              <button className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors">
+                <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
+                  <Users className="w-5 h-5 text-muted-foreground" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-foreground">Membros da Casa</p>
+                  <p className="text-sm text-muted-foreground truncate">
+                    Gerenciar quem usa o app
+                  </p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-muted-foreground" />
+              </button>
+            </div>
+          </div>
+
+          {/* Data */}
+          <div>
+            <h3 className="text-sm font-medium text-muted-foreground mb-3 px-1">
+              Dados
+            </h3>
+            <div className="glass-card divide-y divide-border overflow-hidden">
+              <button 
+                onClick={handleExportReport}
+                className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors"
+              >
+                <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
+                  <Download className="w-5 h-5 text-muted-foreground" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-foreground">Exportar Relatório</p>
+                  <p className="text-sm text-muted-foreground truncate">
+                    PDF ou Excel
+                  </p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-muted-foreground" />
+              </button>
+              <button className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors">
+                <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
+                  <Shield className="w-5 h-5 text-muted-foreground" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-foreground">Segurança</p>
+                  <p className="text-sm text-muted-foreground truncate">
+                    Backup automático ativado
+                  </p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-muted-foreground" />
+              </button>
+            </div>
+          </div>
+
+          {/* Support */}
+          <div>
+            <h3 className="text-sm font-medium text-muted-foreground mb-3 px-1">
+              Suporte
+            </h3>
+            <div className="glass-card overflow-hidden">
+              <button className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors">
+                <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
+                  <HelpCircle className="w-5 h-5 text-muted-foreground" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-foreground">Ajuda</p>
+                  <p className="text-sm text-muted-foreground truncate">
+                    Perguntas frequentes
+                  </p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-muted-foreground" />
+              </button>
+            </div>
+          </div>
 
           {/* Logout */}
           <button 
@@ -157,6 +302,108 @@ export default function Settings() {
           CasaClara v1.0.0
         </p>
       </div>
+
+      {/* Edit Profile Sheet */}
+      {showEditProfile && (
+        <div className="fixed inset-0 z-50 animate-fade-in">
+          <div 
+            className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+            onClick={() => setShowEditProfile(false)}
+          />
+          
+          <div className="absolute bottom-0 left-0 right-0 bg-card rounded-t-3xl animate-slide-up max-h-[80vh] overflow-y-auto">
+            <div className="flex justify-center pt-3 pb-2">
+              <div className="w-12 h-1.5 bg-muted rounded-full" />
+            </div>
+            
+            <div className="flex items-center justify-between px-4 pb-4 border-b border-border">
+              <h2 className="text-xl font-bold text-foreground">Editar Perfil</h2>
+              <Button variant="ghost" size="icon-sm" onClick={() => setShowEditProfile(false)}>
+                <X className="w-5 h-5" />
+              </Button>
+            </div>
+            
+            <div className="p-4 space-y-6 pb-safe">
+              {/* Avatar */}
+              <div className="flex flex-col items-center gap-4">
+                <div className="relative">
+                  <div className="w-24 h-24 rounded-full bg-accent/20 flex items-center justify-center overflow-hidden border-4 border-card">
+                    {isUploading ? (
+                      <Loader2 className="w-8 h-8 text-accent animate-spin" />
+                    ) : avatarPreview ? (
+                      <img src={avatarPreview} alt="Avatar" className="w-full h-full object-cover" />
+                    ) : (
+                      <User className="w-10 h-10 text-accent" />
+                    )}
+                  </div>
+                  <button 
+                    onClick={() => fileInputRef.current?.click()}
+                    className="absolute bottom-0 right-0 w-8 h-8 bg-primary text-primary-foreground rounded-full flex items-center justify-center shadow-lg"
+                    disabled={isUploading}
+                  >
+                    <Camera className="w-4 h-4" />
+                  </button>
+                </div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => e.target.files?.[0] && handleAvatarSelect(e.target.files[0])}
+                />
+                <p className="text-sm text-muted-foreground">
+                  Toque na câmera para alterar a foto
+                </p>
+              </div>
+              
+              {/* Name Input */}
+              <div>
+                <label className="text-sm font-medium text-muted-foreground mb-2 block">
+                  Nome de exibição
+                </label>
+                <input
+                  type="text"
+                  placeholder="Seu nome"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  className="mobile-input"
+                />
+              </div>
+              
+              {/* Email (read-only) */}
+              <div>
+                <label className="text-sm font-medium text-muted-foreground mb-2 block">
+                  Email
+                </label>
+                <input
+                  type="email"
+                  value={user?.email || ""}
+                  disabled
+                  className="mobile-input bg-muted/50 text-muted-foreground"
+                />
+              </div>
+              
+              {/* Save Button */}
+              <Button 
+                variant="accent" 
+                size="lg" 
+                className="w-full"
+                onClick={handleSaveProfile}
+                disabled={isSaving || !displayName.trim()}
+              >
+                {isSaving ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Salvando...
+                  </>
+                ) : (
+                  "Salvar Alterações"
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </MobileLayout>
   );
 }
