@@ -76,7 +76,7 @@ export default function Auth() {
             <Home className="w-10 h-10 text-accent" />
           </div>
           <h1 className="text-3xl font-bold text-foreground">
-            Casa<span className="text-accent">Clara</span>
+            Casa<span className="text-accent">Campos</span>
           </h1>
           <p className="text-muted-foreground mt-2">
             Suas finanças em ordem, sua casa em paz

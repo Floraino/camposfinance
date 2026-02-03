@@ -97,12 +97,12 @@ export function ExportReportSheet({ open, onClose }: ExportReportSheetProps) {
         ]);
         
         content = [headers.join(";"), ...rows.map(r => r.join(";"))].join("\n");
-        filename = `casaclara_relatorio_${format(new Date(), "yyyy-MM-dd")}.csv`;
+        filename = `casacampos_relatorio_${format(new Date(), "yyyy-MM-dd")}.csv`;
         mimeType = "text/csv;charset=utf-8;";
       } else {
         // Create JSON
         content = JSON.stringify(data, null, 2);
-        filename = `casaclara_relatorio_${format(new Date(), "yyyy-MM-dd")}.json`;
+        filename = `casacampos_relatorio_${format(new Date(), "yyyy-MM-dd")}.json`;
         mimeType = "application/json";
       }
 
