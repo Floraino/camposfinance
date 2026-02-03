@@ -1,10 +1,11 @@
 import { useState, useEffect } from "react";
-import { Bell, ChevronRight, Sparkles, TrendingDown, Wallet, Loader2 } from "lucide-react";
+import { Bell, ChevronRight, Sparkles, TrendingDown, Wallet, Loader2, ScanLine, Plus } from "lucide-react";
 import { MobileLayout } from "@/components/layout/MobileLayout";
 import { StatCard } from "@/components/ui/StatCard";
 import { TransactionCard, type Transaction as UITransaction } from "@/components/transactions/TransactionCard";
 import { ExpensePieChart, MonthlyBarChart } from "@/components/charts/ExpenseCharts";
 import { AddTransactionSheet } from "@/components/transactions/AddTransactionSheet";
+import { ReceiptScanner } from "@/components/receipts/ReceiptScanner";
 import { type CategoryType } from "@/components/ui/CategoryBadge";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
@@ -18,6 +19,7 @@ export default function Dashboard() {
   
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [showAddSheet, setShowAddSheet] = useState(false);
+  const [showScanner, setShowScanner] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [stats, setStats] = useState({
     totalExpenses: 0,
@@ -169,6 +171,34 @@ export default function Dashboard() {
           <ChevronRight className="w-5 h-5 text-muted-foreground flex-shrink-0" />
         </button>
 
+        {/* Quick Actions */}
+        <div className="flex gap-3 mb-6">
+          <button
+            onClick={() => setShowScanner(true)}
+            className="flex-1 glass-card p-4 flex items-center gap-3 touch-feedback"
+          >
+            <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center">
+              <ScanLine className="w-5 h-5 text-primary" />
+            </div>
+            <div className="text-left">
+              <p className="text-sm font-medium text-foreground">Escanear Cupom</p>
+              <p className="text-xs text-muted-foreground">Leitura com IA</p>
+            </div>
+          </button>
+          <button
+            onClick={() => setShowAddSheet(true)}
+            className="flex-1 glass-card p-4 flex items-center gap-3 touch-feedback"
+          >
+            <div className="w-10 h-10 rounded-xl bg-accent/20 flex items-center justify-center">
+              <Plus className="w-5 h-5 text-accent" />
+            </div>
+            <div className="text-left">
+              <p className="text-sm font-medium text-foreground">Novo Gasto</p>
+              <p className="text-xs text-muted-foreground">Manual</p>
+            </div>
+          </button>
+        </div>
+
         {/* Stats Cards */}
         <div className="grid grid-cols-2 gap-3 mb-6">
           <StatCard
@@ -244,6 +274,13 @@ export default function Dashboard() {
         isOpen={showAddSheet}
         onClose={() => setShowAddSheet(false)}
         onAdd={handleAddTransaction}
+      />
+
+      {/* Receipt Scanner */}
+      <ReceiptScanner
+        isOpen={showScanner}
+        onClose={() => setShowScanner(false)}
+        onTransactionAdded={loadData}
       />
     </MobileLayout>
   );

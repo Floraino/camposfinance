@@ -1,0 +1,234 @@
+import { useState, useRef } from "react";
+import { Camera, Upload, X, Loader2, ScanLine } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
+import { ReceiptReviewSheet, type ExtractedReceipt } from "./ReceiptReviewSheet";
+
+interface ReceiptScannerProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onTransactionAdded: () => void;
+}
+
+export function ReceiptScanner({ isOpen, onClose, onTransactionAdded }: ReceiptScannerProps) {
+  const [isScanning, setIsScanning] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [extractedData, setExtractedData] = useState<ExtractedReceipt | null>(null);
+  const [showReview, setShowReview] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const { toast } = useToast();
+
+  const handleFileSelect = async (file: File) => {
+    if (!file.type.startsWith("image/")) {
+      toast({
+        title: "Arquivo inválido",
+        description: "Por favor, selecione uma imagem",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Show preview
+    const url = URL.createObjectURL(file);
+    setPreviewUrl(url);
+
+    // Convert to base64
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = (reader.result as string).split(",")[1];
+      await processImage(base64, file.type);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const processImage = async (imageBase64: string, mimeType: string) => {
+    setIsScanning(true);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast({
+          title: "Sessão expirada",
+          description: "Por favor, faça login novamente",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/scan-receipt`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ imageBase64, mimeType }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Erro ao processar cupom");
+      }
+
+      setExtractedData(data);
+      setShowReview(true);
+    } catch (error) {
+      console.error("Error scanning receipt:", error);
+      toast({
+        title: "Erro ao ler cupom",
+        description: error instanceof Error ? error.message : "Tente novamente",
+        variant: "destructive",
+      });
+      resetScanner();
+    } finally {
+      setIsScanning(false);
+    }
+  };
+
+  const resetScanner = () => {
+    setPreviewUrl(null);
+    setExtractedData(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    if (cameraInputRef.current) cameraInputRef.current.value = "";
+  };
+
+  const handleClose = () => {
+    resetScanner();
+    onClose();
+  };
+
+  const handleReviewClose = () => {
+    setShowReview(false);
+    resetScanner();
+  };
+
+  const handleTransactionSaved = () => {
+    setShowReview(false);
+    resetScanner();
+    onClose();
+    onTransactionAdded();
+  };
+
+  return (
+    <>
+      <Sheet open={isOpen && !showReview} onOpenChange={(open) => !open && handleClose()}>
+        <SheetContent side="bottom" className="h-[85vh] rounded-t-3xl">
+          <SheetHeader className="pb-4">
+            <SheetTitle className="flex items-center gap-2">
+              <ScanLine className="w-5 h-5 text-accent" />
+              Escanear Cupom Fiscal
+            </SheetTitle>
+          </SheetHeader>
+
+          <div className="flex flex-col h-[calc(100%-4rem)]">
+            {isScanning ? (
+              <div className="flex-1 flex flex-col items-center justify-center gap-4">
+                <div className="relative">
+                  {previewUrl && (
+                    <img
+                      src={previewUrl}
+                      alt="Preview"
+                      className="w-48 h-48 object-cover rounded-2xl opacity-50"
+                    />
+                  )}
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <Loader2 className="w-12 h-12 text-accent animate-spin" />
+                  </div>
+                </div>
+                <p className="text-muted-foreground text-center">
+                  Analisando cupom com IA...
+                </p>
+              </div>
+            ) : previewUrl ? (
+              <div className="flex-1 flex flex-col items-center justify-center gap-4">
+                <div className="relative">
+                  <img
+                    src={previewUrl}
+                    alt="Preview"
+                    className="max-h-64 rounded-2xl shadow-lg"
+                  />
+                  <button
+                    onClick={resetScanner}
+                    className="absolute -top-2 -right-2 w-8 h-8 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center shadow-lg"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex-1 flex flex-col items-center justify-center gap-6">
+                <div className="text-center mb-4">
+                  <div className="w-24 h-24 bg-accent/10 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <ScanLine className="w-12 h-12 text-accent" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-foreground mb-2">
+                    Leitura Automática
+                  </h3>
+                  <p className="text-sm text-muted-foreground max-w-xs">
+                    Tire uma foto ou selecione uma imagem do cupom fiscal para extrair os dados automaticamente
+                  </p>
+                </div>
+
+                <div className="flex gap-4 w-full max-w-xs">
+                  <Button
+                    variant="outline"
+                    className="flex-1 h-24 flex-col gap-2"
+                    onClick={() => cameraInputRef.current?.click()}
+                  >
+                    <Camera className="w-6 h-6" />
+                    <span className="text-xs">Câmera</span>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="flex-1 h-24 flex-col gap-2"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <Upload className="w-6 h-6" />
+                    <span className="text-xs">Galeria</span>
+                  </Button>
+                </div>
+
+                <input
+                  ref={cameraInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="hidden"
+                  onChange={(e) => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
+                />
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
+                />
+              </div>
+            )}
+
+            <div className="pt-4 border-t border-border">
+              <p className="text-xs text-muted-foreground text-center">
+                Suporta cupom fiscal, nota fiscal e comprovantes PIX/cartão
+              </p>
+            </div>
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {extractedData && (
+        <ReceiptReviewSheet
+          isOpen={showReview}
+          onClose={handleReviewClose}
+          extractedData={extractedData}
+          onSave={handleTransactionSaved}
+        />
+      )}
+    </>
+  );
+}
