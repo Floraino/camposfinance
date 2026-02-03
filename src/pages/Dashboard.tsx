@@ -16,6 +16,7 @@ import { getTransactions, addTransaction, getMonthlyStats, getMonthlyEvolution, 
 import { getCurrentBudget, type Budget } from "@/services/budgetService";
 import { useToast } from "@/hooks/use-toast";
 import { Progress } from "@/components/ui/progress";
+import { supabase } from "@/integrations/supabase/client";
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -31,6 +32,8 @@ export default function Dashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [monthlyData, setMonthlyData] = useState<MonthlyExpense[]>([]);
   const [budget, setBudget] = useState<Budget | null>(null);
+  const [odinInsight, setOdinInsight] = useState<string>("");
+  const [isLoadingInsight, setIsLoadingInsight] = useState(false);
   
   // Month navigation state
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
@@ -71,6 +74,73 @@ export default function Dashboard() {
       setIsLoading(false);
     }
   };
+
+  const fetchOdinInsight = async (txs: Transaction[]) => {
+    if (txs.length === 0) {
+      setOdinInsight("Adicione seu primeiro gasto para que eu possa analisar suas finanças! 📊");
+      return;
+    }
+
+    setIsLoadingInsight(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/clara-chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          messages: [{ 
+            role: "user", 
+            content: "Me dê uma dica rápida e objetiva (máximo 2 frases curtas) sobre meus gastos deste mês. Seja direto e útil." 
+          }],
+          quickInsight: true,
+        }),
+      });
+
+      if (!response.ok) throw new Error("Failed to fetch insight");
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("No reader");
+
+      const decoder = new TextDecoder();
+      let insightText = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split("\n");
+        
+        for (const line of lines) {
+          if (line.startsWith("data: ") && line !== "data: [DONE]") {
+            try {
+              const json = JSON.parse(line.slice(6));
+              const content = json.choices?.[0]?.delta?.content;
+              if (content) insightText += content;
+            } catch { /* ignore parse errors */ }
+          }
+        }
+      }
+
+      setOdinInsight(insightText || "Analisando seus padrões de gastos... 🔍");
+    } catch (error) {
+      console.error("Error fetching insight:", error);
+      setOdinInsight("Toque para ver análise completa das suas finanças 💡");
+    } finally {
+      setIsLoadingInsight(false);
+    }
+  };
+
+  useEffect(() => {
+    if (transactions.length > 0 && !isLoading) {
+      fetchOdinInsight(transactions);
+    }
+  }, [transactions.length, isLoading]);
 
   const handleAddTransaction = async (newTx: NewTransaction) => {
     try {
@@ -246,9 +316,14 @@ export default function Dashboard() {
           <div className="flex-1 text-left">
             <p className="text-sm font-medium text-foreground">Dica do Odin</p>
             <p className="text-xs text-muted-foreground line-clamp-2">
-              {transactions.length === 0 
-                ? "Adicione seu primeiro gasto para começar a acompanhar suas finanças!"
-                : "Você gastou 15% mais com delivery este mês. Que tal cozinhar mais em casa?"}
+              {isLoadingInsight ? (
+                <span className="flex items-center gap-1">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  Analisando seus gastos...
+                </span>
+              ) : (
+                odinInsight || "Toque para conversar sobre suas finanças"
+              )}
             </p>
           </div>
           <ChevronRight className="w-5 h-5 text-muted-foreground flex-shrink-0" />
