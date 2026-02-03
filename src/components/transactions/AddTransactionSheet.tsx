@@ -1,9 +1,11 @@
-import { useState } from "react";
-import { X, Camera, Image as ImageIcon, ChevronRight } from "lucide-react";
+import { useState, useRef } from "react";
+import { X, Camera, Image as ImageIcon, ChevronRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CategoryBadge, categoryConfig, type CategoryType } from "@/components/ui/CategoryBadge";
 import { cn } from "@/lib/utils";
 import { type NewTransaction } from "@/services/transactionService";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
 
 interface AddTransactionSheetProps {
   isOpen: boolean;
@@ -25,6 +27,87 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd }: AddTransactionSh
   const [paymentMethod, setPaymentMethod] = useState<"pix" | "boleto" | "card" | "cash">("pix");
   const [status, setStatus] = useState<"paid" | "pending">("paid");
   const [isRecurring, setIsRecurring] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
+  
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const { toast } = useToast();
+
+  const handleFileSelect = async (file: File) => {
+    if (!file.type.startsWith("image/")) {
+      toast({
+        title: "Arquivo inválido",
+        description: "Por favor, selecione uma imagem",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Convert to base64
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = (reader.result as string).split(",")[1];
+      await processImage(base64, file.type);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const processImage = async (imageBase64: string, mimeType: string) => {
+    setIsScanning(true);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast({
+          title: "Sessão expirada",
+          description: "Por favor, faça login novamente",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/scan-receipt`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ imageBase64, mimeType }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Erro ao processar imagem");
+      }
+
+      // Fill form with extracted data
+      setDescription(data.description || data.establishment || "");
+      setAmount(data.amount?.toString().replace(".", ",") || "");
+      setCategory(data.category as CategoryType || "other");
+      setPaymentMethod(data.paymentMethod as "pix" | "boleto" | "card" | "cash" || "card");
+      
+      toast({
+        title: "Dados extraídos!",
+        description: `Confiança: ${Math.round((data.confidence || 0.5) * 100)}%`,
+      });
+    } catch (error) {
+      console.error("Error scanning receipt:", error);
+      toast({
+        title: "Erro ao ler imagem",
+        description: error instanceof Error ? error.message : "Tente novamente",
+        variant: "destructive",
+      });
+    } finally {
+      setIsScanning(false);
+      // Reset file inputs
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      if (cameraInputRef.current) cameraInputRef.current.value = "";
+    }
+  };
 
   const handleSubmit = () => {
     if (!description || !amount) return;
@@ -79,20 +162,47 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd }: AddTransactionSh
             <Button 
               variant="outline" 
               className="flex-1 h-14 gap-3"
-              onClick={() => alert("Em breve: Leitura de cupom fiscal via câmera")}
+              onClick={() => cameraInputRef.current?.click()}
+              disabled={isScanning}
             >
-              <Camera className="w-5 h-5 text-primary" />
-              <span>Escanear Cupom</span>
+              {isScanning ? (
+                <Loader2 className="w-5 h-5 text-primary animate-spin" />
+              ) : (
+                <Camera className="w-5 h-5 text-primary" />
+              )}
+              <span>{isScanning ? "Analisando..." : "Escanear Cupom"}</span>
             </Button>
             <Button 
               variant="outline" 
               className="flex-1 h-14 gap-3"
-              onClick={() => alert("Em breve: Upload de imagem")}
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isScanning}
             >
-              <ImageIcon className="w-5 h-5 text-primary" />
-              <span>Enviar Imagem</span>
+              {isScanning ? (
+                <Loader2 className="w-5 h-5 text-primary animate-spin" />
+              ) : (
+                <ImageIcon className="w-5 h-5 text-primary" />
+              )}
+              <span>{isScanning ? "Analisando..." : "Enviar Imagem"}</span>
             </Button>
           </div>
+
+          {/* Hidden file inputs */}
+          <input
+            ref={cameraInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(e) => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
+          />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
+          />
           
           <div className="flex items-center gap-4">
             <div className="flex-1 h-px bg-border" />
