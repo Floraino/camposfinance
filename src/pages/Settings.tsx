@@ -1,26 +1,114 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { ChevronRight, Moon, Bell, Shield, Users, Download, HelpCircle, LogOut, User, Camera, X, Loader2 } from "lucide-react";
 import { MobileLayout } from "@/components/layout/MobileLayout";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
+import { useTheme } from "@/components/providers/ThemeProvider";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { FamilyMembersSheet } from "@/components/settings/FamilyMembersSheet";
+import { ExportReportSheet } from "@/components/settings/ExportReportSheet";
+import { HelpSheet } from "@/components/settings/HelpSheet";
+import { SecuritySheet } from "@/components/settings/SecuritySheet";
 
 export default function Settings() {
   const { profile, user, signOut } = useAuth();
+  const { resolvedTheme, setTheme } = useTheme();
   const navigate = useNavigate();
   const { toast } = useToast();
   
   const [showEditProfile, setShowEditProfile] = useState(false);
+  const [showFamilyMembers, setShowFamilyMembers] = useState(false);
+  const [showExportReport, setShowExportReport] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  const [showSecurity, setShowSecurity] = useState(false);
+  
   const [displayName, setDisplayName] = useState(profile?.display_name || "");
   const [avatarPreview, setAvatarPreview] = useState<string | null>(profile?.avatar_url || null);
   const [isUploading, setIsUploading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [darkMode, setDarkMode] = useState(true);
+  const [darkMode, setDarkMode] = useState(resolvedTheme === "dark");
   const [notifications, setNotifications] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Load preferences from database
+  useEffect(() => {
+    if (user) {
+      loadPreferences();
+    }
+  }, [user]);
+
+  // Update theme when darkMode changes
+  useEffect(() => {
+    setTheme(darkMode ? "dark" : "light");
+  }, [darkMode, setTheme]);
+
+  const loadPreferences = async () => {
+    if (!user) return;
+    
+    try {
+      const { data } = await supabase
+        .from("user_preferences")
+        .select("*")
+        .eq("user_id", user.id)
+        .single();
+
+      if (data) {
+        setDarkMode(data.dark_mode);
+        setNotifications(data.notifications_enabled);
+      }
+    } catch (error) {
+      // Preferences don't exist yet, use defaults
+      console.log("No preferences found, using defaults");
+    }
+  };
+
+  const savePreference = async (key: "dark_mode" | "notifications_enabled", value: boolean) => {
+    if (!user) return;
+
+    try {
+      // Try to update existing
+      const { data: existing } = await supabase
+        .from("user_preferences")
+        .select("id")
+        .eq("user_id", user.id)
+        .single();
+
+      if (existing) {
+        await supabase
+          .from("user_preferences")
+          .update({ [key]: value, updated_at: new Date().toISOString() })
+          .eq("user_id", user.id);
+      } else {
+        await supabase
+          .from("user_preferences")
+          .insert({
+            user_id: user.id,
+            [key]: value,
+          });
+      }
+    } catch (error) {
+      console.error("Error saving preference:", error);
+    }
+  };
+
+  const handleDarkModeChange = (checked: boolean) => {
+    setDarkMode(checked);
+    savePreference("dark_mode", checked);
+  };
+
+  const handleNotificationsChange = (checked: boolean) => {
+    setNotifications(checked);
+    savePreference("notifications_enabled", checked);
+    toast({
+      title: checked ? "Notificações ativadas" : "Notificações desativadas",
+      description: checked 
+        ? "Você receberá lembretes de contas." 
+        : "Você não receberá mais lembretes.",
+    });
+  };
 
   const handleSignOut = async () => {
     await signOut();
@@ -132,13 +220,6 @@ export default function Settings() {
     }
   };
 
-  const handleExportReport = () => {
-    toast({
-      title: "Em breve!",
-      description: "Funcionalidade de exportação será adicionada em breve.",
-    });
-  };
-
   return (
     <MobileLayout>
       <div className="px-4 pt-safe">
@@ -192,7 +273,7 @@ export default function Settings() {
                     {darkMode ? "Ativado" : "Desativado"}
                   </p>
                 </div>
-                <Switch checked={darkMode} onCheckedChange={setDarkMode} />
+                <Switch checked={darkMode} onCheckedChange={handleDarkModeChange} />
               </div>
               <div className="flex items-center gap-4 p-4">
                 <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
@@ -204,7 +285,7 @@ export default function Settings() {
                     Lembretes de contas
                   </p>
                 </div>
-                <Switch checked={notifications} onCheckedChange={setNotifications} />
+                <Switch checked={notifications} onCheckedChange={handleNotificationsChange} />
               </div>
             </div>
           </div>
@@ -215,7 +296,10 @@ export default function Settings() {
               Família
             </h3>
             <div className="glass-card overflow-hidden">
-              <button className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors">
+              <button 
+                onClick={() => setShowFamilyMembers(true)}
+                className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors"
+              >
                 <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
                   <Users className="w-5 h-5 text-muted-foreground" />
                 </div>
@@ -237,7 +321,7 @@ export default function Settings() {
             </h3>
             <div className="glass-card divide-y divide-border overflow-hidden">
               <button 
-                onClick={handleExportReport}
+                onClick={() => setShowExportReport(true)}
                 className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors"
               >
                 <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
@@ -251,7 +335,10 @@ export default function Settings() {
                 </div>
                 <ChevronRight className="w-5 h-5 text-muted-foreground" />
               </button>
-              <button className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors">
+              <button 
+                onClick={() => setShowSecurity(true)}
+                className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors"
+              >
                 <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
                   <Shield className="w-5 h-5 text-muted-foreground" />
                 </div>
@@ -272,7 +359,10 @@ export default function Settings() {
               Suporte
             </h3>
             <div className="glass-card overflow-hidden">
-              <button className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors">
+              <button 
+                onClick={() => setShowHelp(true)}
+                className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors"
+              >
                 <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
                   <HelpCircle className="w-5 h-5 text-muted-foreground" />
                 </div>
@@ -404,6 +494,24 @@ export default function Settings() {
           </div>
         </div>
       )}
+
+      {/* Other Sheets */}
+      <FamilyMembersSheet 
+        open={showFamilyMembers} 
+        onClose={() => setShowFamilyMembers(false)} 
+      />
+      <ExportReportSheet 
+        open={showExportReport} 
+        onClose={() => setShowExportReport(false)} 
+      />
+      <HelpSheet 
+        open={showHelp} 
+        onClose={() => setShowHelp(false)} 
+      />
+      <SecuritySheet 
+        open={showSecurity} 
+        onClose={() => setShowSecurity(false)} 
+      />
     </MobileLayout>
   );
 }

@@ -11,6 +11,83 @@
 
 @layer base {
   :root {
+    /* Cores base - tema claro aconchegante */
+    --background: 40 30% 96%;
+    --foreground: 220 15% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 15% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 15% 15%;
+
+    /* Azul petróleo - cor principal */
+    --primary: 195 50% 35%;
+    --primary-foreground: 40 20% 98%;
+
+    /* Verde musgo - cor secundária */
+    --secondary: 150 25% 35%;
+    --secondary-foreground: 40 20% 98%;
+
+    /* Bege quente - acentos */
+    --accent: 35 45% 50%;
+    --accent-foreground: 220 15% 10%;
+
+    --muted: 40 20% 90%;
+    --muted-foreground: 220 10% 45%;
+
+    --destructive: 0 60% 50%;
+    --destructive-foreground: 40 20% 98%;
+
+    /* Cores de status */
+    --success: 150 45% 40%;
+    --success-foreground: 40 20% 98%;
+    --warning: 35 80% 50%;
+    --warning-foreground: 220 15% 10%;
+
+    --border: 40 20% 85%;
+    --input: 40 20% 92%;
+    --ring: 195 50% 35%;
+
+    --radius: 1rem;
+
+    /* Sidebar */
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 220 15% 15%;
+    --sidebar-primary: 195 50% 35%;
+    --sidebar-primary-foreground: 40 20% 98%;
+    --sidebar-accent: 40 20% 92%;
+    --sidebar-accent-foreground: 220 15% 15%;
+    --sidebar-border: 40 20% 85%;
+    --sidebar-ring: 195 50% 35%;
+
+    /* Gradientes customizados */
+    --gradient-primary: linear-gradient(135deg, hsl(195 50% 35%), hsl(195 60% 25%));
+    --gradient-secondary: linear-gradient(135deg, hsl(150 25% 35%), hsl(150 30% 28%));
+    --gradient-accent: linear-gradient(135deg, hsl(35 45% 50%), hsl(35 55% 42%));
+    --gradient-card: linear-gradient(145deg, hsl(0 0% 100%), hsl(40 20% 97%));
+    --gradient-income: linear-gradient(135deg, hsl(150 45% 40%), hsl(150 50% 32%));
+    --gradient-expense: linear-gradient(135deg, hsl(0 60% 50%), hsl(0 65% 42%));
+
+    /* Sombras */
+    --shadow-sm: 0 2px 8px -2px hsla(220, 15%, 20%, 0.1);
+    --shadow-md: 0 4px 16px -4px hsla(220, 15%, 20%, 0.15);
+    --shadow-lg: 0 8px 32px -8px hsla(220, 15%, 20%, 0.2);
+    --shadow-glow-primary: 0 4px 20px -4px hsla(195, 50%, 35%, 0.25);
+    --shadow-glow-accent: 0 4px 20px -4px hsla(35, 45%, 50%, 0.25);
+
+    /* Categorias de gastos */
+    --category-bills: 195 50% 35%;
+    --category-food: 35 60% 50%;
+    --category-leisure: 280 40% 50%;
+    --category-shopping: 330 50% 50%;
+    --category-transport: 200 60% 45%;
+    --category-health: 0 50% 55%;
+    --category-education: 170 50% 40%;
+    --category-other: 220 15% 45%;
+  }
+
+  .dark {
     /* Cores base - tema escuro aconchegante */
     --background: 220 15% 10%;
     --foreground: 40 20% 95%;
@@ -49,9 +126,7 @@
     --input: 220 10% 18%;
     --ring: 195 50% 35%;
 
-    --radius: 1rem;
-
-    /* Sidebar - não usado em mobile-first mas definido */
+    /* Sidebar */
     --sidebar-background: 220 12% 12%;
     --sidebar-foreground: 40 20% 95%;
     --sidebar-primary: 195 50% 35%;
@@ -76,7 +151,7 @@
     --shadow-glow-primary: 0 4px 20px -4px hsla(195, 50%, 35%, 0.3);
     --shadow-glow-accent: 0 4px 20px -4px hsla(35, 40%, 55%, 0.3);
 
-    /* Categorias de gastos - cores específicas */
+    /* Categorias de gastos */
     --category-bills: 195 50% 35%;
     --category-food: 35 60% 50%;
     --category-leisure: 280 40% 50%;
