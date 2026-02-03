@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Check, AlertCircle, Edit2 } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Check, AlertCircle, Edit2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
@@ -55,6 +55,17 @@ export function ReceiptReviewSheet({ isOpen, onClose, extractedData, onSave }: R
     paymentMethod: extractedData.paymentMethod as "pix" | "boleto" | "card" | "cash",
   });
   const { toast } = useToast();
+
+  // Update form data when extractedData changes
+  useEffect(() => {
+    setFormData({
+      description: extractedData.description,
+      amount: extractedData.amount,
+      date: extractedData.date,
+      category: extractedData.category as CategoryType,
+      paymentMethod: extractedData.paymentMethod as "pix" | "boleto" | "card" | "cash",
+    });
+  }, [extractedData]);
 
   const confidenceLevel = extractedData.confidence >= 0.8 ? "high" : extractedData.confidence >= 0.5 ? "medium" : "low";
   const confidenceText = {
@@ -251,7 +262,10 @@ export function ReceiptReviewSheet({ isOpen, onClose, extractedData, onSave }: R
               disabled={isSubmitting}
             >
               {isSubmitting ? (
-                "Salvando..."
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Salvando...
+                </>
               ) : (
                 <>
                   <Check className="w-4 h-4 mr-2" />
