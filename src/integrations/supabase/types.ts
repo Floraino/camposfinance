@@ -14,6 +14,39 @@ export type Database = {
   }
   public: {
     Tables: {
+      budgets: {
+        Row: {
+          amount: number
+          created_at: string
+          end_date: string
+          id: string
+          period_type: string
+          start_date: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          amount?: number
+          created_at?: string
+          end_date: string
+          id?: string
+          period_type?: string
+          start_date: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          amount?: number
+          created_at?: string
+          end_date?: string
+          id?: string
+          period_type?: string
+          start_date?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       categories: {
         Row: {
           color: string
@@ -112,6 +145,7 @@ export type Database = {
           description: string
           id: string
           is_recurring: boolean
+          member_id: string | null
           notes: string | null
           payment_method: string
           status: string
@@ -126,6 +160,7 @@ export type Database = {
           description: string
           id?: string
           is_recurring?: boolean
+          member_id?: string | null
           notes?: string | null
           payment_method?: string
           status?: string
@@ -140,6 +175,7 @@ export type Database = {
           description?: string
           id?: string
           is_recurring?: boolean
+          member_id?: string | null
           notes?: string | null
           payment_method?: string
           status?: string
@@ -147,7 +183,15 @@ export type Database = {
           updated_at?: string
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "transactions_member_id_fkey"
+            columns: ["member_id"]
+            isOneToOne: false
+            referencedRelation: "family_members"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       user_preferences: {
         Row: {

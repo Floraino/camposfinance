@@ -1,9 +1,10 @@
-import { useState, useRef } from "react";
-import { X, Camera, Image as ImageIcon, ChevronRight, Loader2 } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { X, Camera, Image as ImageIcon, ChevronRight, Loader2, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CategoryBadge, categoryConfig, type CategoryType } from "@/components/ui/CategoryBadge";
 import { cn } from "@/lib/utils";
 import { type NewTransaction } from "@/services/transactionService";
+import { getFamilyMembers, type FamilyMember } from "@/services/familyService";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 
@@ -28,10 +29,27 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd }: AddTransactionSh
   const [status, setStatus] = useState<"paid" | "pending">("paid");
   const [isRecurring, setIsRecurring] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
+  const [memberId, setMemberId] = useState<string | undefined>(undefined);
+  const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>([]);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
+
+  useEffect(() => {
+    if (isOpen) {
+      loadFamilyMembers();
+    }
+  }, [isOpen]);
+
+  const loadFamilyMembers = async () => {
+    try {
+      const members = await getFamilyMembers();
+      setFamilyMembers(members);
+    } catch (error) {
+      console.error("Error loading family members:", error);
+    }
+  };
 
   const handleFileSelect = async (file: File) => {
     if (!file.type.startsWith("image/")) {
@@ -119,6 +137,7 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd }: AddTransactionSh
       payment_method: paymentMethod,
       status,
       is_recurring: isRecurring,
+      member_id: memberId,
     });
 
     // Reset form
@@ -128,6 +147,7 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd }: AddTransactionSh
     setPaymentMethod("pix");
     setStatus("paid");
     setIsRecurring(false);
+    setMemberId(undefined);
     onClose();
   };
 
@@ -313,6 +333,44 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd }: AddTransactionSh
               ⏳ Pendente
             </button>
           </div>
+
+          {/* Family Member Selection */}
+          {familyMembers.length > 0 && (
+            <div>
+              <label className="text-sm font-medium text-muted-foreground mb-3 block">
+                Quem gastou?
+              </label>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => setMemberId(undefined)}
+                  className={cn(
+                    "h-10 px-4 rounded-xl border-2 text-sm font-medium transition-all duration-200 flex items-center gap-2",
+                    !memberId
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border bg-muted/50 text-muted-foreground"
+                  )}
+                >
+                  <User className="w-4 h-4" />
+                  Eu
+                </button>
+                {familyMembers.map((member) => (
+                  <button
+                    key={member.id}
+                    onClick={() => setMemberId(member.id)}
+                    className={cn(
+                      "h-10 px-4 rounded-xl border-2 text-sm font-medium transition-all duration-200 flex items-center gap-2",
+                      memberId === member.id
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border bg-muted/50 text-muted-foreground"
+                    )}
+                  >
+                    <User className="w-4 h-4" />
+                    {member.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           
           {/* Recurring Toggle */}
           <button

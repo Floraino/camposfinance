@@ -12,6 +12,8 @@ export interface Transaction {
   is_recurring: boolean;
   transaction_date: string;
   notes: string | null;
+  member_id: string | null;
+  member_name?: string;
   created_at: string;
   updated_at: string;
 }
@@ -25,12 +27,18 @@ export interface NewTransaction {
   is_recurring: boolean;
   transaction_date?: string;
   notes?: string;
+  member_id?: string;
 }
 
 export async function getTransactions(): Promise<Transaction[]> {
   const { data, error } = await supabase
     .from("transactions")
-    .select("*")
+    .select(`
+      *,
+      family_members (
+        name
+      )
+    `)
     .order("transaction_date", { ascending: false });
 
   if (error) throw error;
@@ -40,6 +48,7 @@ export async function getTransactions(): Promise<Transaction[]> {
     category: tx.category as CategoryType,
     payment_method: tx.payment_method as "pix" | "boleto" | "card" | "cash",
     status: tx.status as "paid" | "pending",
+    member_name: (tx.family_members as { name: string } | null)?.name,
   }));
 }
 
@@ -60,8 +69,14 @@ export async function addTransaction(transaction: NewTransaction): Promise<Trans
       is_recurring: transaction.is_recurring,
       transaction_date: transaction.transaction_date || new Date().toISOString().split("T")[0],
       notes: transaction.notes,
+      member_id: transaction.member_id,
     })
-    .select()
+    .select(`
+      *,
+      family_members (
+        name
+      )
+    `)
     .single();
 
   if (error) throw error;
@@ -71,6 +86,7 @@ export async function addTransaction(transaction: NewTransaction): Promise<Trans
     category: data.category as CategoryType,
     payment_method: data.payment_method as "pix" | "boleto" | "card" | "cash",
     status: data.status as "paid" | "pending",
+    member_name: (data.family_members as { name: string } | null)?.name,
   };
 }
 
