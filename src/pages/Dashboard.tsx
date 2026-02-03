@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
-import { Bell, ChevronRight, Sparkles, TrendingDown, Wallet, Loader2, ScanLine, Plus, Settings } from "lucide-react";
+import { Bell, ChevronRight, Sparkles, TrendingDown, Wallet, Loader2, ScanLine, Plus, Settings, ChevronLeft } from "lucide-react";
 import { MobileLayout } from "@/components/layout/MobileLayout";
 import { StatCard } from "@/components/ui/StatCard";
 import { TransactionCard, type Transaction as UITransaction } from "@/components/transactions/TransactionCard";
+import { EditTransactionSheet } from "@/components/transactions/EditTransactionSheet";
 import { ExpensePieChart, MonthlyBarChart } from "@/components/charts/ExpenseCharts";
 import { AddTransactionSheet } from "@/components/transactions/AddTransactionSheet";
 import { ReceiptScanner } from "@/components/receipts/ReceiptScanner";
@@ -24,9 +25,16 @@ export default function Dashboard() {
   const [showAddSheet, setShowAddSheet] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [showBudgetSheet, setShowBudgetSheet] = useState(false);
+  const [showEditSheet, setShowEditSheet] = useState(false);
+  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [monthlyData, setMonthlyData] = useState<MonthlyExpense[]>([]);
   const [budget, setBudget] = useState<Budget | null>(null);
+  
+  // Month navigation state
+  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  
   const [stats, setStats] = useState({
     totalExpenses: 0,
     totalIncome: 0,
@@ -36,14 +44,14 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [selectedMonth, selectedYear]);
 
   const loadData = async () => {
     try {
       setIsLoading(true);
       const [txs, monthStats, evolution, currentBudget] = await Promise.all([
         getTransactions(),
-        getMonthlyStats(),
+        getMonthlyStats(selectedMonth, selectedYear),
         getMonthlyEvolution(5),
         getCurrentBudget("monthly"),
       ]);
@@ -70,7 +78,7 @@ export default function Dashboard() {
       
       // Refresh stats and monthly data
       const [monthStats, evolution] = await Promise.all([
-        getMonthlyStats(),
+        getMonthlyStats(selectedMonth, selectedYear),
         getMonthlyEvolution(5),
       ]);
       setStats(monthStats);
@@ -90,6 +98,44 @@ export default function Dashboard() {
     }
   };
 
+  const handleTransactionClick = (tx: Transaction) => {
+    setSelectedTransaction(tx);
+    setShowEditSheet(true);
+  };
+
+  const handleEditClose = () => {
+    setShowEditSheet(false);
+    setSelectedTransaction(null);
+  };
+
+  const navigateMonth = (direction: "prev" | "next") => {
+    if (direction === "prev") {
+      if (selectedMonth === 0) {
+        setSelectedMonth(11);
+        setSelectedYear(selectedYear - 1);
+      } else {
+        setSelectedMonth(selectedMonth - 1);
+      }
+    } else {
+      const now = new Date();
+      // Don't navigate to future months
+      if (selectedYear === now.getFullYear() && selectedMonth >= now.getMonth()) {
+        return;
+      }
+      if (selectedMonth === 11) {
+        setSelectedMonth(0);
+        setSelectedYear(selectedYear + 1);
+      } else {
+        setSelectedMonth(selectedMonth + 1);
+      }
+    }
+  };
+
+  const isCurrentMonth = () => {
+    const now = new Date();
+    return selectedMonth === now.getMonth() && selectedYear === now.getFullYear();
+  };
+
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat("pt-BR", {
       style: "currency",
@@ -97,8 +143,15 @@ export default function Dashboard() {
     }).format(value);
   };
 
-  const currentDate = new Date();
-  const monthName = currentDate.toLocaleDateString("pt-BR", { month: "long" });
+  const monthNames = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", 
+                      "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+  const monthName = monthNames[selectedMonth];
+
+  // Filter transactions for selected month
+  const filteredTransactions = transactions.filter(tx => {
+    const txDate = new Date(tx.transaction_date);
+    return txDate.getMonth() === selectedMonth && txDate.getFullYear() === selectedYear;
+  });
 
   // Prepare pie chart data
   const pieChartData = Object.entries(stats.byCategory)
@@ -109,7 +162,7 @@ export default function Dashboard() {
     .sort((a, b) => b.amount - a.amount);
 
   // Map Transaction to UITransaction
-  const uiTransactions: UITransaction[] = transactions.map(tx => ({
+  const uiTransactions: UITransaction[] = filteredTransactions.map(tx => ({
     id: tx.id,
     description: tx.description,
     amount: Number(tx.amount),
@@ -157,6 +210,29 @@ export default function Dashboard() {
             )}
           </button>
         </header>
+
+        {/* Month Navigation */}
+        <div className="glass-card p-3 mb-6 flex items-center justify-between">
+          <button 
+            onClick={() => navigateMonth("prev")}
+            className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center touch-feedback"
+          >
+            <ChevronLeft className="w-5 h-5 text-foreground" />
+          </button>
+          <div className="text-center">
+            <p className="font-semibold text-foreground capitalize">{monthName}</p>
+            <p className="text-xs text-muted-foreground">{selectedYear}</p>
+          </div>
+          <button 
+            onClick={() => navigateMonth("next")}
+            disabled={isCurrentMonth()}
+            className={`w-10 h-10 rounded-xl flex items-center justify-center touch-feedback ${
+              isCurrentMonth() ? "bg-muted/50 opacity-50 cursor-not-allowed" : "bg-muted"
+            }`}
+          >
+            <ChevronRight className="w-5 h-5 text-foreground" />
+          </button>
+        </div>
 
         {/* AI Insight Card */}
         <button 
@@ -285,7 +361,9 @@ export default function Dashboard() {
         {/* Recent Transactions */}
         <div className="mb-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold text-foreground">Últimos Lançamentos</h2>
+            <h2 className="font-semibold text-foreground">
+              {isCurrentMonth() ? "Últimos Lançamentos" : `Lançamentos de ${monthName}`}
+            </h2>
             <button 
               onClick={() => navigate("/transactions")}
               className="text-sm text-primary font-medium"
@@ -296,18 +374,28 @@ export default function Dashboard() {
           
           {uiTransactions.length === 0 ? (
             <div className="glass-card p-8 text-center">
-              <p className="text-muted-foreground mb-4">Nenhum gasto registrado ainda</p>
-              <button 
-                onClick={() => setShowAddSheet(true)}
-                className="text-primary font-medium"
-              >
-                Adicionar primeiro gasto
-              </button>
+              <p className="text-muted-foreground mb-4">
+                {isCurrentMonth() 
+                  ? "Nenhum gasto registrado ainda" 
+                  : `Nenhum gasto em ${monthName}`}
+              </p>
+              {isCurrentMonth() && (
+                <button 
+                  onClick={() => setShowAddSheet(true)}
+                  className="text-primary font-medium"
+                >
+                  Adicionar primeiro gasto
+                </button>
+              )}
             </div>
           ) : (
             <div className="space-y-3">
               {uiTransactions.slice(0, 4).map((tx) => (
-                <TransactionCard key={tx.id} transaction={tx} />
+                <TransactionCard 
+                  key={tx.id} 
+                  transaction={tx} 
+                  onClick={() => handleTransactionClick(filteredTransactions.find(t => t.id === tx.id)!)}
+                />
               ))}
             </div>
           )}
@@ -333,6 +421,14 @@ export default function Dashboard() {
         isOpen={showBudgetSheet}
         onClose={() => setShowBudgetSheet(false)}
         onBudgetUpdated={loadData}
+      />
+
+      {/* Edit Transaction Sheet */}
+      <EditTransactionSheet
+        isOpen={showEditSheet}
+        transaction={selectedTransaction}
+        onClose={handleEditClose}
+        onUpdate={loadData}
       />
     </MobileLayout>
   );
