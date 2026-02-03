@@ -216,10 +216,10 @@ export default function Dashboard() {
           />
           <StatCard
             title="Saldo Livre"
-            value={formatCurrency(stats.balance)}
+            value={formatCurrency(budget ? budget.amount - stats.totalExpenses : 0)}
             variant="balance"
             icon={Wallet}
-            subtitle="para gastar"
+            subtitle={budget ? "para gastar" : "defina orçamento"}
           />
         </div>
 
