@@ -63,22 +63,12 @@ export function JoinHouseholdSheet({ open, onClose }: JoinHouseholdSheetProps) {
         pending?: boolean;
         household_id?: string; 
         household_name?: string;
+        member_id?: string;
         message?: string;
       };
 
       if (!result.success) {
         setError(result.error || "Erro ao entrar na família");
-        return;
-      }
-
-      // Check if request is pending approval
-      if (result.pending) {
-        toast({
-          title: "Solicitação enviada!",
-          description: `Aguarde a aprovação do administrador de "${result.household_name}"`,
-        });
-        onClose();
-        setCode("");
         return;
       }
 
@@ -91,15 +81,17 @@ export function JoinHouseholdSheet({ open, onClose }: JoinHouseholdSheetProps) {
       await refreshHouseholds();
       
       // Get the household and switch to it
-      const { data: households } = await supabase
-        .from("households")
-        .select("*")
-        .eq("id", result.household_id)
-        .single();
+      if (result.household_id) {
+        const { data: household } = await supabase
+          .from("households")
+          .select("*")
+          .eq("id", result.household_id)
+          .single();
 
-      if (households) {
-        switchHousehold(households);
-        navigate("/");
+        if (household) {
+          switchHousehold(household);
+          navigate("/");
+        }
       }
 
       onClose();

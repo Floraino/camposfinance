@@ -20,9 +20,9 @@ interface InviteCode {
   id: string;
   code: string;
   expires_at: string;
-  uses_count: number;
-  max_uses: number;
-  is_active: boolean;
+  uses_count: number | null;
+  max_uses: number | null;
+  is_active: boolean | null;
 }
 
 export function InviteCodeSheet({ open, onClose }: InviteCodeSheetProps) {
@@ -163,6 +163,12 @@ export function InviteCodeSheet({ open, onClose }: InviteCodeSheetProps) {
     return `Expira em ${days} dias`;
   };
 
+  const formatUses = (usesCount: number | null, maxUses: number | null) => {
+    const uses = usesCount ?? 0;
+    const max = maxUses ?? 10;
+    return `${uses}/${max} usos`;
+  };
+
   if (!isAdmin) {
     return (
       <Sheet open={open} onOpenChange={onClose}>
@@ -245,7 +251,7 @@ export function InviteCodeSheet({ open, onClose }: InviteCodeSheetProps) {
                       onClick={() => copyCode(invite.code)}
                     >
                       {copiedCode === invite.code ? (
-                        <Check className="w-4 h-4 text-green-500" />
+                        <Check className="w-4 h-4 text-accent" />
                       ) : (
                         <Copy className="w-4 h-4" />
                       )}
@@ -261,7 +267,7 @@ export function InviteCodeSheet({ open, onClose }: InviteCodeSheetProps) {
                 </div>
                 <div className="flex items-center justify-between text-sm text-muted-foreground">
                   <span>{formatExpiry(invite.expires_at)}</span>
-                  <span>{invite.uses_count}/{invite.max_uses} usos</span>
+                  <span>{formatUses(invite.uses_count, invite.max_uses)}</span>
                 </div>
               </div>
             ))
