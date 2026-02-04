@@ -132,7 +132,16 @@ async function updateTransaction(supabase: any, householdId: string, id: string,
   return { success: true, message: "Transação atualizada com sucesso!" };
 }
 
+// Normalize text for search (remove accents, lowercase)
+function normalizeText(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
 // Preview deletion - returns summary without deleting
+// Now supports: specific IDs, description search, category, date range, amount
 async function previewDeletion(supabase: any, householdId: string, filters: any): Promise<{
   success: boolean;
   count: number;
@@ -140,36 +149,95 @@ async function previewDeletion(supabase: any, householdId: string, filters: any)
   sumAmount: number;
   rangeLabel: string;
   topCategories: { name: string; count: number }[];
+  sample: { id: string; date: string; amount: number; description: string; category: string }[];
   message: string;
+  filterType: "specific" | "category" | "description" | "combined" | "all";
 }> {
+  // If searching for specific transaction IDs
+  if (filters.transactionIds && filters.transactionIds.length > 0) {
+    const { data: transactions, error } = await supabase
+      .from("transactions")
+      .select("id, amount, category, transaction_date, description")
+      .eq("household_id", householdId)
+      .in("id", filters.transactionIds);
+
+    if (error) {
+      return {
+        success: false,
+        count: 0,
+        transactionIds: [],
+        sumAmount: 0,
+        rangeLabel: "",
+        topCategories: [],
+        sample: [],
+        message: `Erro ao buscar: ${error.message}`,
+        filterType: "specific",
+      };
+    }
+
+    const txList = transactions || [];
+    return {
+      success: true,
+      count: txList.length,
+      transactionIds: txList.map((t: any) => t.id),
+      sumAmount: txList.reduce((sum: number, t: any) => sum + Math.abs(t.amount), 0),
+      rangeLabel: `${txList.length} lançamento(s) específico(s)`,
+      topCategories: [],
+      sample: txList.slice(0, 10).map((t: any) => ({
+        id: t.id,
+        date: t.transaction_date,
+        amount: t.amount,
+        description: t.description,
+        category: categoryLabels[t.category] || t.category,
+      })),
+      message: txList.length > 0
+        ? `Encontrado(s) ${txList.length} lançamento(s) específico(s).`
+        : `Lançamento(s) não encontrado(s).`,
+      filterType: "specific",
+    };
+  }
+
   let query = supabase
     .from("transactions")
-    .select("id, amount, category, transaction_date")
+    .select("id, amount, category, transaction_date, description")
     .eq("household_id", householdId);
 
   let rangeLabel = "";
+  const labelParts: string[] = [];
   const now = new Date();
 
-  // Apply filters
+  // Apply date filters
   if (filters.month !== undefined && filters.year !== undefined) {
     const start = new Date(filters.year, filters.month, 1).toISOString().split("T")[0];
     const end = new Date(filters.year, filters.month + 1, 0).toISOString().split("T")[0];
     query = query.gte("transaction_date", start).lte("transaction_date", end);
-    rangeLabel = `${monthNames[filters.month]}/${filters.year}`;
+    labelParts.push(`${monthNames[filters.month]}/${filters.year}`);
   } else if (filters.startDate && filters.endDate) {
     query = query.gte("transaction_date", filters.startDate).lte("transaction_date", filters.endDate);
-    rangeLabel = `${filters.startDate} a ${filters.endDate}`;
-  } else {
-    // Default: current month
-    const start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0];
-    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split("T")[0];
-    query = query.gte("transaction_date", start).lte("transaction_date", end);
-    rangeLabel = `${monthNames[now.getMonth()]}/${now.getFullYear()}`;
+    labelParts.push(`${filters.startDate} a ${filters.endDate}`);
+  } else if (filters.specificDate) {
+    query = query.eq("transaction_date", filters.specificDate);
+    labelParts.push(`dia ${filters.specificDate}`);
   }
 
+  // Apply category filter
   if (filters.category) {
     query = query.eq("category", filters.category);
-    rangeLabel += ` (${categoryLabels[filters.category] || filters.category})`;
+    labelParts.push(`categoria ${categoryLabels[filters.category] || filters.category}`);
+  }
+
+  // Apply amount filter (exact or range)
+  if (filters.exactAmount !== undefined) {
+    // Match both positive and negative versions
+    query = query.or(`amount.eq.${filters.exactAmount},amount.eq.${-filters.exactAmount}`);
+    labelParts.push(`valor R$ ${Math.abs(filters.exactAmount).toFixed(2)}`);
+  } else if (filters.minAmount !== undefined || filters.maxAmount !== undefined) {
+    if (filters.minAmount !== undefined) {
+      query = query.gte("amount", -Math.abs(filters.minAmount));
+    }
+    if (filters.maxAmount !== undefined) {
+      query = query.lte("amount", Math.abs(filters.maxAmount));
+    }
   }
 
   const { data: transactions, error } = await query;
@@ -182,14 +250,50 @@ async function previewDeletion(supabase: any, householdId: string, filters: any)
       sumAmount: 0,
       rangeLabel: "",
       topCategories: [],
+      sample: [],
       message: `Erro ao buscar: ${error.message}`,
+      filterType: "all",
     };
   }
 
-  const txList = transactions || [];
-  const transactionIds = txList.map((t: any) => t.id); // Full UUIDs
+  let txList = transactions || [];
+
+  // Apply description filter (client-side for flexibility)
+  if (filters.descriptionMatch) {
+    const searchText = normalizeText(filters.descriptionMatch.text || filters.descriptionMatch);
+    const mode = filters.descriptionMatch.mode || "CONTAINS";
+
+    txList = txList.filter((t: any) => {
+      const desc = normalizeText(t.description || "");
+      if (mode === "EQUALS") {
+        return desc === searchText;
+      }
+      return desc.includes(searchText);
+    });
+
+    const displayText = typeof filters.descriptionMatch === "string" 
+      ? filters.descriptionMatch 
+      : filters.descriptionMatch.text;
+    labelParts.push(`descrição contendo "${displayText}"`);
+  }
+
+  // Determine filter type
+  let filterType: "specific" | "category" | "description" | "combined" | "all" = "all";
+  if (filters.descriptionMatch && !filters.category && !filters.month) {
+    filterType = "description";
+  } else if (filters.category && !filters.descriptionMatch) {
+    filterType = "category";
+  } else if (labelParts.length > 1) {
+    filterType = "combined";
+  }
+
+  // Build range label
+  rangeLabel = labelParts.length > 0 ? labelParts.join(", ") : "todos os lançamentos";
+
+  const transactionIds = txList.map((t: any) => t.id);
   const sumAmount = txList.reduce((sum: number, t: any) => sum + Math.abs(t.amount), 0);
 
+  // Count by category
   const categoryCount: Record<string, number> = {};
   txList.forEach((t: any) => {
     const cat = categoryLabels[t.category] || t.category;
@@ -201,6 +305,15 @@ async function previewDeletion(supabase: any, householdId: string, filters: any)
     .slice(0, 5)
     .map(([name, count]) => ({ name, count }));
 
+  // Sample of transactions for preview
+  const sample = txList.slice(0, 10).map((t: any) => ({
+    id: t.id,
+    date: t.transaction_date,
+    amount: t.amount,
+    description: t.description,
+    category: categoryLabels[t.category] || t.category,
+  }));
+
   return {
     success: true,
     count: txList.length,
@@ -208,9 +321,11 @@ async function previewDeletion(supabase: any, householdId: string, filters: any)
     sumAmount,
     rangeLabel,
     topCategories,
+    sample,
     message: txList.length > 0
-      ? `Encontrados ${txList.length} lançamentos para exclusão (${rangeLabel}).`
+      ? `Encontrado(s) ${txList.length} lançamento(s) (${rangeLabel}).`
       : `Nenhum lançamento encontrado para os filtros especificados.`,
+    filterType,
   };
 }
 
@@ -289,16 +404,55 @@ const aiTools = [
   {
     type: "function",
     function: {
-      name: "request_deletion_preview",
-      description: "Preview de exclusão de LANÇAMENTOS (transações) apenas. NUNCA para famílias ou usuários. Retorna preview para confirmação do usuário.",
+      name: "search_transactions",
+      description: "Buscar lançamentos por descrição, valor, data ou categoria. Use para encontrar um lançamento específico antes de editar ou excluir.",
       parameters: {
         type: "object",
         properties: {
+          descriptionMatch: { type: "string", description: "Texto para buscar na descrição (case-insensitive, ignora acentos)" },
+          category: { type: "string", enum: ["food", "transport", "entertainment", "health", "education", "shopping", "bills", "other"] },
+          exactAmount: { type: "number", description: "Valor exato a buscar (positivo)" },
+          specificDate: { type: "string", description: "Data específica YYYY-MM-DD" },
+          month: { type: "integer", description: "Mês (0-11)" },
+          year: { type: "integer", description: "Ano" },
+          limit: { type: "integer", description: "Máximo de resultados (padrão 10)", default: 10 },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "request_deletion_preview",
+      description: `Preview de exclusão de LANÇAMENTOS. Use para exclusão SELETIVA:
+      
+      Tipo A - Lançamento específico: Use transactionIds com UUIDs específicos
+      Tipo B - Por categoria: Use category + período opcional
+      Tipo C - Por descrição: Use descriptionMatch com texto a buscar
+      Tipo D - Combinado: Use múltiplos filtros juntos
+      
+      NUNCA use esta função sem filtros específicos - isso excluiria tudo!
+      Se o usuário pedir "apagar este lançamento específico", primeiro use search_transactions para encontrar o ID.`,
+      parameters: {
+        type: "object",
+        properties: {
+          transactionIds: { 
+            type: "array", 
+            items: { type: "string" },
+            description: "Lista de UUIDs específicos para excluir (Tipo A - exclusão de lançamentos específicos)" 
+          },
+          descriptionMatch: { 
+            type: "string", 
+            description: "Texto para buscar na descrição (Tipo C - exclusão por descrição). Case-insensitive, ignora acentos." 
+          },
+          category: { type: "string", enum: ["food", "transport", "entertainment", "health", "education", "shopping", "bills", "other"], description: "Filtrar por categoria (Tipo B)" },
           month: { type: "integer", description: "Mês (0-11). 0=Janeiro, 11=Dezembro" },
           year: { type: "integer", description: "Ano (ex: 2026)" },
-          category: { type: "string", enum: ["food", "transport", "entertainment", "health", "education", "shopping", "bills", "other"], description: "Filtrar por categoria" },
+          specificDate: { type: "string", description: "Data específica YYYY-MM-DD" },
           startDate: { type: "string", description: "Data inicial YYYY-MM-DD" },
           endDate: { type: "string", description: "Data final YYYY-MM-DD" },
+          exactAmount: { type: "number", description: "Valor exato a buscar" },
         },
         required: [],
       },
@@ -533,12 +687,32 @@ Se o usuário pedir qualquer uma dessas ações, você DEVE:
 - NUNCA mencione, infira ou use dados de outras famílias
 - Se o usuário perguntar sobre outra família/casa, responda: "Eu só tenho acesso aos dados da família ${householdName}. Para ver dados de outra família, você precisa trocar a família ativa nas configurações."
 
-🔒 MODO DE SEGURANÇA - REGRAS PARA EXCLUSÃO DE LANÇAMENTOS:
-1. Você SÓ pode excluir LANÇAMENTOS/TRANSAÇÕES (nunca famílias ou usuários)
-2. NUNCA execute exclusões diretamente
-3. SEMPRE use a função request_deletion_preview PRIMEIRO
-4. A exclusão real será feita pelo frontend após confirmação dupla do usuário
-5. Ao responder sobre exclusões, SEMPRE informe que o usuário precisa confirmar a ação
+🔒 MODO DE SEGURANÇA - REGRAS PARA EXCLUSÃO SELETIVA DE LANÇAMENTOS:
+
+CLASSIFICAÇÃO DE INTENÇÃO DO USUÁRIO:
+Quando o usuário pedir para apagar/excluir, classifique em:
+
+**Tipo A - Lançamento Específico** (ex: "Apague o Pix de R$150 do dia 04/02")
+→ Use search_transactions primeiro para encontrar o lançamento exato
+→ Se encontrar 1, use request_deletion_preview com transactionIds
+→ Se encontrar múltiplos, pergunte qual (mostre lista curta)
+
+**Tipo B - Por Categoria** (ex: "Apague todos da categoria Outros em fevereiro")
+→ Use request_deletion_preview com category + período
+
+**Tipo C - Por Descrição** (ex: "Apague todos contendo 'Pix recebido de ANDRE'")
+→ Use request_deletion_preview com descriptionMatch
+
+**Tipo D - Filtros Combinados** (ex: "Apague 'Pix recebido' em fevereiro categoria Outros")
+→ Use request_deletion_preview com múltiplos filtros
+
+⚠️ REGRAS CRÍTICAS:
+1. NUNCA use request_deletion_preview SEM filtros (isso apagaria tudo!)
+2. Só use "apagar todos" quando o usuário EXPLICITAMENTE pedir
+3. Para pedidos específicos, SEMPRE priorize Tipo A (buscar primeiro)
+4. Se encontrar muitos resultados (>20), pergunte se quer restringir mais
+5. SEMPRE mostre preview antes da exclusão real
+6. A exclusão real será feita pelo frontend após confirmação dupla
 
 INFORMAÇÕES DO USUÁRIO:
 - Nome: ${profile?.display_name || "Usuário"}
@@ -573,12 +747,13 @@ ${recurringExpenses.length > 0 ? recurringExpenses.map((t: any) => `- ${t.descri
 SUAS FUNÇÕES DISPONÍVEIS (APENAS ESTAS):
 - add_transaction: Adicionar lançamento financeiro
 - update_transaction: Editar lançamento existente (com UUID completo)
-- request_deletion_preview: Preview de exclusão de LANÇAMENTOS (com double-confirmation)
+- search_transactions: Buscar lançamentos por descrição, valor, data ou categoria
+- request_deletion_preview: Preview de exclusão SELETIVA de lançamentos
 
 ⚠️ IMPORTANTE SOBRE IDs:
 - Use SEMPRE o UUID completo (ex: 550e8400-e29b-41d4-a716-446655440000)
 - NUNCA use IDs truncados (ex: 550e8400)
-- Se não encontrar o ID exato, peça ao usuário para especificar
+- Se não encontrar o ID exato, use search_transactions para buscar
 
 INSTRUÇÕES:
 1. Seja amigável, use emojis ocasionalmente
@@ -589,8 +764,9 @@ INSTRUÇÕES:
 6. Responda em português brasileiro
 7. Valores de gastos devem ser NEGATIVOS
 8. NUNCA invente dados
-9. Para exclusões de lançamentos, SEMPRE mencione que o Modo de Segurança está ativo
-10. NUNCA tente excluir famílias ou usuários - essas operações são bloqueadas`;
+9. Para exclusões, SEMPRE mencione que o Modo de Segurança está ativo
+10. NUNCA tente excluir famílias ou usuários - essas operações são bloqueadas
+11. Para exclusões específicas, use search_transactions PRIMEIRO para encontrar o ID`;
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -713,14 +889,58 @@ INSTRUÇÕES:
                 }
                 break;
 
+              case "search_transactions":
+                // Search for transactions matching filters
+                const searchResult = await previewDeletion(supabase, householdId, args);
+                if (searchResult.success && searchResult.count > 0) {
+                  const limit = args.limit || 10;
+                  const sampleList = searchResult.sample.slice(0, limit)
+                    .map((t: any) => `- **${t.date}** | ${t.description}: R$ ${Math.abs(t.amount).toFixed(2)} (${t.category}) [ID: ${t.id}]`)
+                    .join("\n");
+                  
+                  const searchMsg = `\n\n🔍 **Encontrei ${searchResult.count} lançamento(s)**:\n\n${sampleList}${searchResult.count > limit ? `\n\n_...e mais ${searchResult.count - limit} resultados._` : ""}\n`;
+                  
+                  const searchResultMsg = `data: ${JSON.stringify({
+                    choices: [{ delta: { content: searchMsg } }]
+                  })}\n\n`;
+                  controller.enqueue(encoder.encode(searchResultMsg));
+                } else {
+                  const noResultMsg = `data: ${JSON.stringify({
+                    choices: [{ delta: { content: `\n\n🔍 Nenhum lançamento encontrado com esses filtros.\n` } }]
+                  })}\n\n`;
+                  controller.enqueue(encoder.encode(noResultMsg));
+                }
+                continue;
+
               case "request_deletion_preview":
+                // Validate that filters are provided (never delete all without explicit filters)
+                const hasFilters = args.transactionIds || args.descriptionMatch || args.category || 
+                  args.month !== undefined || args.year !== undefined || 
+                  args.startDate || args.endDate || args.specificDate || args.exactAmount;
+                
+                if (!hasFilters) {
+                  const warningMsg = `data: ${JSON.stringify({
+                    choices: [{ delta: { content: `\n\n⚠️ **Atenção**: Você não especificou filtros. Isso apagaria TODOS os lançamentos!\n\nPor favor, especifique:\n- Um período (mês/ano ou datas)\n- Uma categoria\n- Uma descrição para buscar\n- Ou um lançamento específico\n` } }]
+                  })}\n\n`;
+                  controller.enqueue(encoder.encode(warningMsg));
+                  continue;
+                }
+
                 const preview = await previewDeletion(supabase, householdId, args);
-                // Send special message for frontend to handle
+                
+                // Build sample list for preview
+                const samplePreview = preview.sample && preview.sample.length > 0
+                  ? `\n📋 **Exemplos de lançamentos afetados:**\n${preview.sample.slice(0, 5).map((t: any) => 
+                      `- ${t.date} | ${t.description}: R$ ${Math.abs(t.amount).toFixed(2)} (${t.category})`
+                    ).join("\n")}\n${preview.count > 5 ? `\n_...e mais ${preview.count - 5} lançamentos._\n` : ""}`
+                  : "";
+
                 const previewMsg = preview.success && preview.count > 0
                   ? `\n\n🔒 **Modo de Segurança Ativado**\n\n` +
-                    `Encontrei **${preview.count} lançamentos** para exclusão (${preview.rangeLabel}).\n` +
-                    `💰 Valor total: R$ ${preview.sumAmount.toFixed(2)}\n\n` +
-                    `${preview.topCategories.length > 0 ? `📊 Categorias: ${preview.topCategories.map(c => `${c.name} (${c.count})`).join(", ")}\n\n` : ""}` +
+                    `Encontrei **${preview.count} lançamento(s)** para exclusão (${preview.rangeLabel}).\n` +
+                    `💰 Valor total: R$ ${preview.sumAmount.toFixed(2)}\n` +
+                    `${preview.topCategories.length > 0 ? `\n📊 Categorias: ${preview.topCategories.map(c => `${c.name} (${c.count})`).join(", ")}\n` : ""}` +
+                    `${samplePreview}\n` +
                     `⚠️ **Esta ação não pode ser desfeita.**\n\n` +
                     `Para confirmar, clique no botão de exclusão que apareceu abaixo.\n\n` +
                     `<!-- DELETION_PREVIEW:${JSON.stringify({
@@ -729,6 +949,7 @@ INSTRUÇÕES:
                       sumAmount: preview.sumAmount,
                       rangeLabel: preview.rangeLabel,
                       topCategories: preview.topCategories,
+                      sample: preview.sample,
                       householdId,
                       householdName,
                     })} -->`
@@ -738,7 +959,7 @@ INSTRUÇÕES:
                   choices: [{ delta: { content: previewMsg } }]
                 })}\n\n`;
                 controller.enqueue(encoder.encode(previewResult));
-                continue; // Don't add standard result message
+                continue;
 
               default:
                 result = { success: false, message: "Função não reconhecida" };
