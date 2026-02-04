@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { ChevronRight, Moon, Bell, Shield, Users, Download, Upload, HelpCircle, LogOut, User, Camera, X, Loader2, Crown, Home, Wallet, RefreshCw } from "lucide-react";
+import { ChevronRight, Moon, Bell, Shield, Users, Download, Upload, HelpCircle, LogOut, User, Camera, X, Loader2, Crown, Home, Wallet, RefreshCw, Split } from "lucide-react";
 import { MobileLayout } from "@/components/layout/MobileLayout";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
@@ -403,6 +403,21 @@ export default function Settings() {
                   <p className="font-medium text-foreground">Membros da Casa</p>
                   <p className="text-sm text-muted-foreground truncate">
                     Gerenciar quem usa o app
+                  </p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-muted-foreground" />
+              </button>
+              <button 
+                onClick={() => navigate("/splits")}
+                className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors border-t border-border"
+              >
+                <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
+                  <Split className="w-5 h-5 text-muted-foreground" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-foreground">Rateios</p>
+                  <p className="text-sm text-muted-foreground truncate">
+                    Dividir contas de viagens
                   </p>
                 </div>
                 <ChevronRight className="w-5 h-5 text-muted-foreground" />
