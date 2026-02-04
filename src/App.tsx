@@ -15,6 +15,7 @@ import Settings from "./pages/Settings";
 import Auth from "./pages/Auth";
 import HouseholdSelection from "./pages/HouseholdSelection";
 import Splits from "./pages/Splits";
+import Subscribe from "./pages/Subscribe";
 import NotFound from "./pages/NotFound";
 import AdminDashboard from "./pages/admin/AdminDashboard";
 import AdminHouseholds from "./pages/admin/AdminHouseholds";
@@ -175,6 +176,14 @@ const AppRoutes = () => (
         <ProtectedRoute>
           <Splits />
         </ProtectedRoute>
+      }
+    />
+    <Route
+      path="/subscribe"
+      element={
+        <AuthenticatedRoute>
+          <Subscribe />
+        </AuthenticatedRoute>
       }
     />
     {/* Admin Routes */}
