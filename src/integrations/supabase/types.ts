@@ -553,6 +553,122 @@ export type Database = {
         }
         Relationships: []
       }
+      split_events: {
+        Row: {
+          created_at: string
+          created_by_user_id: string
+          currency: string
+          description: string | null
+          id: string
+          owner_household_id: string
+          status: Database["public"]["Enums"]["split_event_status"]
+          title: string
+          total_amount: number
+          total_shares: number
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by_user_id: string
+          currency?: string
+          description?: string | null
+          id?: string
+          owner_household_id: string
+          status?: Database["public"]["Enums"]["split_event_status"]
+          title: string
+          total_amount: number
+          total_shares: number
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by_user_id?: string
+          currency?: string
+          description?: string | null
+          id?: string
+          owner_household_id?: string
+          status?: Database["public"]["Enums"]["split_event_status"]
+          title?: string
+          total_amount?: number
+          total_shares?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "split_events_owner_household_id_fkey"
+            columns: ["owner_household_id"]
+            isOneToOne: false
+            referencedRelation: "households"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      split_participants: {
+        Row: {
+          amount_calculated: number
+          created_at: string
+          id: string
+          notes: string | null
+          paid_amount: number
+          paid_at: string | null
+          participant_household_id: string
+          payer_user_id: string | null
+          payment_method: string | null
+          payment_proof_url: string | null
+          payment_status: Database["public"]["Enums"]["split_payment_status"]
+          shares: number
+          split_event_id: string
+          updated_at: string
+        }
+        Insert: {
+          amount_calculated?: number
+          created_at?: string
+          id?: string
+          notes?: string | null
+          paid_amount?: number
+          paid_at?: string | null
+          participant_household_id: string
+          payer_user_id?: string | null
+          payment_method?: string | null
+          payment_proof_url?: string | null
+          payment_status?: Database["public"]["Enums"]["split_payment_status"]
+          shares: number
+          split_event_id: string
+          updated_at?: string
+        }
+        Update: {
+          amount_calculated?: number
+          created_at?: string
+          id?: string
+          notes?: string | null
+          paid_amount?: number
+          paid_at?: string | null
+          participant_household_id?: string
+          payer_user_id?: string | null
+          payment_method?: string | null
+          payment_proof_url?: string | null
+          payment_status?: Database["public"]["Enums"]["split_payment_status"]
+          shares?: number
+          split_event_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "split_participants_participant_household_id_fkey"
+            columns: ["participant_household_id"]
+            isOneToOne: false
+            referencedRelation: "households"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "split_participants_split_event_id_fkey"
+            columns: ["split_event_id"]
+            isOneToOne: false
+            referencedRelation: "split_events"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       transactions: {
         Row: {
           account_id: string | null
@@ -702,7 +818,15 @@ export type Database = {
         Returns: Json
       }
       can_create_account: { Args: { _household_id: string }; Returns: boolean }
+      can_manage_split_event: {
+        Args: { _split_event_id: string; _user_id: string }
+        Returns: boolean
+      }
       can_use_ocr: { Args: { _household_id: string }; Returns: boolean }
+      can_view_split_event: {
+        Args: { _split_event_id: string; _user_id: string }
+        Returns: boolean
+      }
       count_household_accounts: {
         Args: { _household_id: string }
         Returns: number
@@ -744,6 +868,8 @@ export type Database = {
       household_role: "owner" | "admin" | "member"
       plan_status: "active" | "cancelled" | "expired" | "trial"
       plan_type: "BASIC" | "PRO"
+      split_event_status: "DRAFT" | "ACTIVE" | "CLOSED"
+      split_payment_status: "UNPAID" | "PARTIAL" | "PAID"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -875,6 +1001,8 @@ export const Constants = {
       household_role: ["owner", "admin", "member"],
       plan_status: ["active", "cancelled", "expired", "trial"],
       plan_type: ["BASIC", "PRO"],
+      split_event_status: ["DRAFT", "ACTIVE", "CLOSED"],
+      split_payment_status: ["UNPAID", "PARTIAL", "PAID"],
     },
   },
 } as const
