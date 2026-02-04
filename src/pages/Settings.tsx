@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { ChevronRight, Moon, Bell, Shield, Users, Download, Upload, HelpCircle, LogOut, User, Camera, X, Loader2, Crown, Home, Wallet, RefreshCw, Split } from "lucide-react";
+import { ChevronRight, Moon, Bell, Shield, Users, Download, Upload, HelpCircle, LogOut, User, Camera, X, Loader2, Crown, Home, Wallet, RefreshCw, Split, Zap, Target, AlertTriangle } from "lucide-react";
 import { MobileLayout } from "@/components/layout/MobileLayout";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,8 @@ import { PlanBadge } from "@/components/paywall/PlanBadge";
 import { UpgradeModal } from "@/components/paywall/UpgradeModal";
 import { ProBadge, ProIndicator } from "@/components/paywall/ProBadge";
 import { HouseholdSwitcher } from "@/components/household/HouseholdSwitcher";
+import { CategorizationRulesSheet } from "@/components/settings/CategorizationRulesSheet";
+import { CategoryBudgetsSheet } from "@/components/settings/CategoryBudgetsSheet";
 
 export default function Settings() {
   const { profile, user, signOut } = useAuth();
@@ -45,6 +47,8 @@ export default function Settings() {
   const [showHelp, setShowHelp] = useState(false);
   const [showSecurity, setShowSecurity] = useState(false);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [showCategorizationRules, setShowCategorizationRules] = useState(false);
+  const [showCategoryBudgets, setShowCategoryBudgets] = useState(false);
   const [upgradeFeature, setUpgradeFeature] = useState<"CSV_IMPORT" | "DATA_EXPORT">("CSV_IMPORT");
   
   const [displayName, setDisplayName] = useState(profile?.display_name || "");
@@ -450,6 +454,60 @@ export default function Settings() {
             </div>
           </div>
 
+          {/* Automações */}
+          <div>
+            <h3 className="text-sm font-medium text-muted-foreground mb-3 px-1">
+              Automações
+            </h3>
+            <div className="glass-card divide-y divide-border overflow-hidden">
+              <button 
+                onClick={() => setShowCategorizationRules(true)}
+                className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors"
+              >
+                <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
+                  <Zap className="w-5 h-5 text-muted-foreground" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-foreground">Regras Automáticas</p>
+                  <p className="text-sm text-muted-foreground truncate">
+                    Categorize gastos automaticamente
+                  </p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-muted-foreground" />
+              </button>
+              <button 
+                onClick={() => setShowCategoryBudgets(true)}
+                className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors"
+              >
+                <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
+                  <Target className="w-5 h-5 text-muted-foreground" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-foreground">Metas por Categoria</p>
+                  <p className="text-sm text-muted-foreground truncate">
+                    Limites mensais por categoria
+                  </p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-muted-foreground" />
+              </button>
+              <button 
+                onClick={() => navigate("/pending")}
+                className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors"
+              >
+                <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
+                  <AlertTriangle className="w-5 h-5 text-muted-foreground" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-foreground">Pendências</p>
+                  <p className="text-sm text-muted-foreground truncate">
+                    Revisar itens que precisam de atenção
+                  </p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-muted-foreground" />
+              </button>
+            </div>
+          </div>
+
           {/* Data */}
           <div>
             <h3 className="text-sm font-medium text-muted-foreground mb-3 px-1">
@@ -727,6 +785,20 @@ export default function Settings() {
         onClose={() => setShowUpgradeModal(false)} 
         feature={upgradeFeature}
       />
+      {currentHousehold?.id && (
+        <>
+          <CategorizationRulesSheet 
+            isOpen={showCategorizationRules} 
+            onClose={() => setShowCategorizationRules(false)}
+            householdId={currentHousehold.id}
+          />
+          <CategoryBudgetsSheet 
+            isOpen={showCategoryBudgets} 
+            onClose={() => setShowCategoryBudgets(false)}
+            householdId={currentHousehold.id}
+          />
+        </>
+      )}
     </MobileLayout>
   );
 }

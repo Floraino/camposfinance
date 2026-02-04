@@ -215,6 +215,113 @@ export type Database = {
           },
         ]
       }
+      categorization_rules: {
+        Row: {
+          account_id: string | null
+          category: string
+          created_at: string
+          created_by: string
+          household_id: string
+          id: string
+          is_active: boolean
+          match_type: string
+          pattern: string
+          priority: number
+          times_applied: number
+          updated_at: string
+        }
+        Insert: {
+          account_id?: string | null
+          category: string
+          created_at?: string
+          created_by: string
+          household_id: string
+          id?: string
+          is_active?: boolean
+          match_type?: string
+          pattern: string
+          priority?: number
+          times_applied?: number
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string | null
+          category?: string
+          created_at?: string
+          created_by?: string
+          household_id?: string
+          id?: string
+          is_active?: boolean
+          match_type?: string
+          pattern?: string
+          priority?: number
+          times_applied?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "categorization_rules_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "categorization_rules_household_id_fkey"
+            columns: ["household_id"]
+            isOneToOne: false
+            referencedRelation: "households"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      category_budgets: {
+        Row: {
+          alert_threshold: number
+          amount: number
+          category: string
+          created_at: string
+          created_by: string
+          household_id: string
+          id: string
+          month: number
+          updated_at: string
+          year: number
+        }
+        Insert: {
+          alert_threshold?: number
+          amount: number
+          category: string
+          created_at?: string
+          created_by: string
+          household_id: string
+          id?: string
+          month: number
+          updated_at?: string
+          year: number
+        }
+        Update: {
+          alert_threshold?: number
+          amount?: number
+          category?: string
+          created_at?: string
+          created_by?: string
+          household_id?: string
+          id?: string
+          month?: number
+          updated_at?: string
+          year?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "category_budgets_household_id_fkey"
+            columns: ["household_id"]
+            isOneToOne: false
+            referencedRelation: "households"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       coupon_redemptions: {
         Row: {
           coupon_id: string
@@ -886,6 +993,14 @@ export type Database = {
         }
         Returns: Json
       }
+      apply_categorization_rules: {
+        Args: { _description: string; _household_id: string }
+        Returns: {
+          account_id: string
+          category: string
+          rule_id: string
+        }[]
+      }
       can_create_account: { Args: { _household_id: string }; Returns: boolean }
       can_manage_split_event: {
         Args: { _split_event_id: string; _user_id: string }
@@ -913,6 +1028,13 @@ export type Database = {
       }
       create_household_with_owner: { Args: { _name: string }; Returns: Json }
       generate_invite_code: { Args: never; Returns: string }
+      get_category_spending: {
+        Args: { _household_id: string; _month: number; _year: number }
+        Returns: {
+          category: string
+          total_spent: number
+        }[]
+      }
       get_household_plan: {
         Args: { _household_id: string }
         Returns: Database["public"]["Enums"]["plan_type"]
@@ -924,6 +1046,7 @@ export type Database = {
         }
         Returns: boolean
       }
+      increment_rule_usage: { Args: { _rule_id: string }; Returns: undefined }
       is_household_admin: {
         Args: { _household_id: string; _user_id: string }
         Returns: boolean
