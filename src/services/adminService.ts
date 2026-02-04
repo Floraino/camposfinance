@@ -345,3 +345,104 @@ export function generateCouponCode(): string {
   }
   return result;
 }
+
+// Delete household (cascade deletes members, plans, transactions, accounts)
+export async function deleteHousehold(householdId: string): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Não autenticado");
+
+  // Delete related data first (cascade may not be set up)
+  await supabase.from("transactions").delete().eq("household_id", householdId);
+  await supabase.from("accounts").delete().eq("household_id", householdId);
+  await supabase.from("family_members").delete().eq("household_id", householdId);
+  await supabase.from("budgets").delete().eq("household_id", householdId);
+  await supabase.from("categories").delete().eq("household_id", householdId);
+  await supabase.from("household_invites").delete().eq("household_id", householdId);
+  await supabase.from("household_join_requests").delete().eq("household_id", householdId);
+  await supabase.from("coupon_redemptions").delete().eq("household_id", householdId);
+  await supabase.from("household_plans").delete().eq("household_id", householdId);
+  await supabase.from("household_members").delete().eq("household_id", householdId);
+
+  const { error } = await supabase.from("households").delete().eq("id", householdId);
+  if (error) throw error;
+
+  // Log action
+  await supabase.from("admin_audit_logs").insert({
+    admin_user_id: user.id,
+    action_type: "delete_household",
+    target_type: "household",
+    target_id: householdId,
+    metadata: {},
+  });
+}
+
+// Update household name
+export async function updateHouseholdName(householdId: string, name: string): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Não autenticado");
+
+  const { error } = await supabase
+    .from("households")
+    .update({ name, updated_at: new Date().toISOString() })
+    .eq("id", householdId);
+
+  if (error) throw error;
+
+  // Log action
+  await supabase.from("admin_audit_logs").insert({
+    admin_user_id: user.id,
+    action_type: "update_household",
+    target_type: "household",
+    target_id: householdId,
+    metadata: { new_name: name },
+  });
+}
+
+// Delete user profile (does not delete auth user, just profile)
+export async function deleteUserProfile(userId: string): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Não autenticado");
+
+  // Remove from all households
+  await supabase.from("household_members").delete().eq("user_id", userId);
+  
+  // Delete user preferences
+  await supabase.from("user_preferences").delete().eq("user_id", userId);
+  
+  // Delete user roles
+  await supabase.from("user_roles").delete().eq("user_id", userId);
+
+  const { error } = await supabase.from("profiles").delete().eq("user_id", userId);
+  if (error) throw error;
+
+  // Log action
+  await supabase.from("admin_audit_logs").insert({
+    admin_user_id: user.id,
+    action_type: "delete_user",
+    target_type: "user",
+    target_id: userId,
+    metadata: {},
+  });
+}
+
+// Update user display name
+export async function updateUserDisplayName(userId: string, displayName: string): Promise<void> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Não autenticado");
+
+  const { error } = await supabase
+    .from("profiles")
+    .update({ display_name: displayName, updated_at: new Date().toISOString() })
+    .eq("user_id", userId);
+
+  if (error) throw error;
+
+  // Log action
+  await supabase.from("admin_audit_logs").insert({
+    admin_user_id: user.id,
+    action_type: "update_user",
+    target_type: "user",
+    target_id: userId,
+    metadata: { new_display_name: displayName },
+  });
+}
