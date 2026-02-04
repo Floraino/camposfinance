@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
 import { HouseholdProvider, useHousehold } from "@/hooks/useHousehold";
+import { AdminProvider, useAdmin } from "@/hooks/useAdmin";
 import { ThemeProvider } from "@/components/providers/ThemeProvider";
 import Dashboard from "./pages/Dashboard";
 import Transactions from "./pages/Transactions";
@@ -14,6 +15,11 @@ import Settings from "./pages/Settings";
 import Auth from "./pages/Auth";
 import HouseholdSelection from "./pages/HouseholdSelection";
 import NotFound from "./pages/NotFound";
+import AdminDashboard from "./pages/admin/AdminDashboard";
+import AdminHouseholds from "./pages/admin/AdminHouseholds";
+import AdminUsers from "./pages/admin/AdminUsers";
+import AdminCoupons from "./pages/admin/AdminCoupons";
+import AdminAudit from "./pages/admin/AdminAudit";
 import { Loader2 } from "lucide-react";
 
 const queryClient = new QueryClient();
@@ -57,6 +63,30 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   // If no household is selected, redirect to selection page
   if (!hasSelectedHousehold || !currentHousehold) {
     return <Navigate to="/select-household" replace />;
+  }
+
+  return <>{children}</>;
+}
+
+// Route that requires super admin access
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { user, isLoading: authLoading } = useAuth();
+  const { isSuperAdmin, isLoading: adminLoading } = useAdmin();
+
+  if (authLoading || adminLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-primary animate-spin" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Navigate to="/auth" replace />;
+  }
+
+  if (!isSuperAdmin) {
+    return <Navigate to="/" replace />;
   }
 
   return <>{children}</>;
@@ -138,6 +168,47 @@ const AppRoutes = () => (
         </ProtectedRoute>
       }
     />
+    {/* Admin Routes */}
+    <Route
+      path="/admin"
+      element={
+        <AdminRoute>
+          <AdminDashboard />
+        </AdminRoute>
+      }
+    />
+    <Route
+      path="/admin/households"
+      element={
+        <AdminRoute>
+          <AdminHouseholds />
+        </AdminRoute>
+      }
+    />
+    <Route
+      path="/admin/users"
+      element={
+        <AdminRoute>
+          <AdminUsers />
+        </AdminRoute>
+      }
+    />
+    <Route
+      path="/admin/coupons"
+      element={
+        <AdminRoute>
+          <AdminCoupons />
+        </AdminRoute>
+      }
+    />
+    <Route
+      path="/admin/audit"
+      element={
+        <AdminRoute>
+          <AdminAudit />
+        </AdminRoute>
+      }
+    />
     <Route path="*" element={<NotFound />} />
   </Routes>
 );
@@ -148,11 +219,13 @@ const App = () => (
       <TooltipProvider>
         <BrowserRouter>
           <AuthProvider>
-            <HouseholdProvider>
-              <Toaster />
-              <Sonner />
-              <AppRoutes />
-            </HouseholdProvider>
+            <AdminProvider>
+              <HouseholdProvider>
+                <Toaster />
+                <Sonner />
+                <AppRoutes />
+              </HouseholdProvider>
+            </AdminProvider>
           </AuthProvider>
         </BrowserRouter>
       </TooltipProvider>

@@ -64,6 +64,36 @@ export type Database = {
           },
         ]
       }
+      admin_audit_logs: {
+        Row: {
+          action_type: string
+          admin_user_id: string
+          created_at: string
+          id: string
+          metadata: Json | null
+          target_id: string | null
+          target_type: string
+        }
+        Insert: {
+          action_type: string
+          admin_user_id: string
+          created_at?: string
+          id?: string
+          metadata?: Json | null
+          target_id?: string | null
+          target_type: string
+        }
+        Update: {
+          action_type?: string
+          admin_user_id?: string
+          created_at?: string
+          id?: string
+          metadata?: Json | null
+          target_id?: string | null
+          target_type?: string
+        }
+        Relationships: []
+      }
       budgets: {
         Row: {
           amount: number
@@ -124,6 +154,93 @@ export type Database = {
           is_system?: boolean
           name?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      coupon_redemptions: {
+        Row: {
+          coupon_id: string
+          days_granted_snapshot: number
+          household_id: string
+          id: string
+          redeemed_at: string
+          redeemed_by_user_id: string
+        }
+        Insert: {
+          coupon_id: string
+          days_granted_snapshot: number
+          household_id: string
+          id?: string
+          redeemed_at?: string
+          redeemed_by_user_id: string
+        }
+        Update: {
+          coupon_id?: string
+          days_granted_snapshot?: number
+          household_id?: string
+          id?: string
+          redeemed_at?: string
+          redeemed_by_user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "coupon_redemptions_coupon_id_fkey"
+            columns: ["coupon_id"]
+            isOneToOne: false
+            referencedRelation: "coupons"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "coupon_redemptions_household_id_fkey"
+            columns: ["household_id"]
+            isOneToOne: false
+            referencedRelation: "households"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      coupons: {
+        Row: {
+          code: string
+          created_at: string
+          created_by_admin_id: string
+          days_granted: number
+          expires_at: string | null
+          id: string
+          is_active: boolean
+          max_redemptions: number | null
+          notes: string | null
+          redeemed_count: number
+          type: string
+          updated_at: string
+        }
+        Insert: {
+          code: string
+          created_at?: string
+          created_by_admin_id: string
+          days_granted?: number
+          expires_at?: string | null
+          id?: string
+          is_active?: boolean
+          max_redemptions?: number | null
+          notes?: string | null
+          redeemed_count?: number
+          type?: string
+          updated_at?: string
+        }
+        Update: {
+          code?: string
+          created_at?: string
+          created_by_admin_id?: string
+          days_granted?: number
+          expires_at?: string | null
+          id?: string
+          is_active?: boolean
+          max_redemptions?: number | null
+          notes?: string | null
+          redeemed_count?: number
+          type?: string
+          updated_at?: string
         }
         Relationships: []
       }
@@ -303,6 +420,8 @@ export type Database = {
           household_id: string
           id: string
           plan: Database["public"]["Enums"]["plan_type"]
+          pro_expires_at: string | null
+          source: string | null
           started_at: string
           status: Database["public"]["Enums"]["plan_status"]
           stripe_customer_id: string | null
@@ -315,6 +434,8 @@ export type Database = {
           household_id: string
           id?: string
           plan?: Database["public"]["Enums"]["plan_type"]
+          pro_expires_at?: string | null
+          source?: string | null
           started_at?: string
           status?: Database["public"]["Enums"]["plan_status"]
           stripe_customer_id?: string | null
@@ -327,6 +448,8 @@ export type Database = {
           household_id?: string
           id?: string
           plan?: Database["public"]["Enums"]["plan_type"]
+          pro_expires_at?: string | null
+          source?: string | null
           started_at?: string
           status?: Database["public"]["Enums"]["plan_status"]
           stripe_customer_id?: string | null
@@ -373,6 +496,7 @@ export type Database = {
           created_at: string
           display_name: string
           id: string
+          is_blocked: boolean
           updated_at: string
           user_id: string
         }
@@ -381,6 +505,7 @@ export type Database = {
           created_at?: string
           display_name: string
           id?: string
+          is_blocked?: boolean
           updated_at?: string
           user_id: string
         }
@@ -389,6 +514,7 @@ export type Database = {
           created_at?: string
           display_name?: string
           id?: string
+          is_blocked?: boolean
           updated_at?: string
           user_id?: string
         }
@@ -500,11 +626,48 @@ export type Database = {
         }
         Relationships: []
       }
+      user_roles: {
+        Row: {
+          created_at: string
+          id: string
+          role: Database["public"]["Enums"]["app_role"]
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
+      admin_grant_pro_days: {
+        Args: { _admin_id: string; _days: number; _household_id: string }
+        Returns: Json
+      }
+      admin_set_plan: {
+        Args: {
+          _admin_id: string
+          _expires_at: string
+          _household_id: string
+          _plan: Database["public"]["Enums"]["plan_type"]
+        }
+        Returns: Json
+      }
       can_create_account: { Args: { _household_id: string }; Returns: boolean }
       can_use_ocr: { Args: { _household_id: string }; Returns: boolean }
       count_household_accounts: {
@@ -516,6 +679,13 @@ export type Database = {
         Args: { _household_id: string }
         Returns: Database["public"]["Enums"]["plan_type"]
       }
+      has_app_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
       is_household_admin: {
         Args: { _household_id: string; _user_id: string }
         Returns: boolean
@@ -524,13 +694,19 @@ export type Database = {
         Args: { _household_id: string; _user_id: string }
         Returns: boolean
       }
+      is_super_admin: { Args: { _user_id: string }; Returns: boolean }
       join_household_by_code: { Args: { _code: string }; Returns: Json }
+      redeem_coupon: {
+        Args: { _code: string; _household_id: string }
+        Returns: Json
+      }
       respond_to_join_request: {
         Args: { _approve: boolean; _request_id: string }
         Returns: Json
       }
     }
     Enums: {
+      app_role: "super_admin" | "user"
       household_role: "owner" | "admin" | "member"
       plan_status: "active" | "cancelled" | "expired" | "trial"
       plan_type: "BASIC" | "PRO"
@@ -661,6 +837,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
+      app_role: ["super_admin", "user"],
       household_role: ["owner", "admin", "member"],
       plan_status: ["active", "cancelled", "expired", "trial"],
       plan_type: ["BASIC", "PRO"],
