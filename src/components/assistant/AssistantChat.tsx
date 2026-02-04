@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect } from "react";
-import { Send, Loader2 } from "lucide-react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { Send, Loader2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import odinLogo from "@/assets/odin-logo.png";
@@ -7,26 +7,59 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useHousehold } from "@/hooks/useHousehold";
 import ReactMarkdown from "react-markdown";
+import { DestructiveActionConfirmation, DestructiveActionPreview } from "./DestructiveActionConfirmation";
+import { deleteTransactionsBatch } from "@/services/destructiveActionsService";
 
 interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
+  deletionPreview?: DestructiveActionPreview;
 }
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/clara-chat`;
+
+// Parse deletion preview from AI response
+function parseDeletionPreview(content: string): DestructiveActionPreview | null {
+  const match = content.match(/<!-- DELETION_PREVIEW:(.+?) -->/);
+  if (match) {
+    try {
+      const data = JSON.parse(match[1]);
+      return {
+        actionType: "delete_transactions",
+        count: data.count,
+        transactionIds: data.transactionIds,
+        householdName: data.householdName,
+        householdId: data.householdId,
+        rangeLabel: data.rangeLabel,
+        sumAmount: data.sumAmount,
+        topCategories: data.topCategories,
+      };
+    } catch (e) {
+      console.error("Failed to parse deletion preview:", e);
+    }
+  }
+  return null;
+}
+
+// Remove hidden preview data from displayed content
+function cleanMessageContent(content: string): string {
+  return content.replace(/<!-- DELETION_PREVIEW:.+? -->/g, "").trim();
+}
 
 export function AssistantChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [isInitializing, setIsInitializing] = useState(true);
+  const [confirmationOpen, setConfirmationOpen] = useState(false);
+  const [currentPreview, setCurrentPreview] = useState<DestructiveActionPreview | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
   const { currentHousehold, hasSelectedHousehold } = useHousehold();
   
-  // Track the household ID to detect changes
   const previousHouseholdIdRef = useRef<string | null>(null);
 
   const scrollToBottom = () => {
@@ -37,11 +70,10 @@ export function AssistantChat() {
     scrollToBottom();
   }, [messages]);
 
-  // CRITICAL: Reset chat when household changes
+  // Reset chat when household changes
   useEffect(() => {
     const currentHouseholdId = currentHousehold?.id || null;
     
-    // If household changed, reset the entire chat
     if (previousHouseholdIdRef.current !== null && previousHouseholdIdRef.current !== currentHouseholdId) {
       console.log("Household changed, resetting AI chat context");
       setMessages([]);
@@ -51,7 +83,7 @@ export function AssistantChat() {
     previousHouseholdIdRef.current = currentHouseholdId;
   }, [currentHousehold?.id]);
 
-  // Initialize with a greeting from the AI
+  // Initialize with a greeting
   useEffect(() => {
     const initializeChat = async () => {
       if (!hasSelectedHousehold || !currentHousehold) {
@@ -79,7 +111,6 @@ export function AssistantChat() {
           return;
         }
 
-        // Send initial message to get personalized greeting with household context
         await streamChat({
           messages: [{ role: "user", content: `Olá! Me dê uma análise rápida das finanças da família ${currentHousehold.name}.` }],
           isInitial: true,
@@ -89,7 +120,7 @@ export function AssistantChat() {
         setMessages([{
           id: "1",
           role: "assistant",
-          content: `Olá! Sou o Odin, seu assistente financeiro da família **${currentHousehold.name}**. Como posso te ajudar hoje? 💰`,
+          content: `Olá! Sou o Odin, seu assistente financeiro da família **${currentHousehold.name}**. 🔒 Modo de Segurança está ativo para proteger seus dados. Como posso te ajudar? 💰`,
           timestamp: new Date(),
         }]);
       }
@@ -133,7 +164,6 @@ export function AssistantChat() {
       },
       body: JSON.stringify({ 
         messages: chatMessages,
-        // CRITICAL: Always send the current household ID
         householdId: currentHousehold.id 
       }),
     });
@@ -150,7 +180,7 @@ export function AssistantChat() {
         return;
       }
       
-      throw new Error(error.error || "Falha ao conectar com a Clara");
+      throw new Error(error.error || "Falha ao conectar com o Odin");
     }
 
     if (!resp.body) throw new Error("No response body");
@@ -161,7 +191,6 @@ export function AssistantChat() {
     let assistantContent = "";
     const assistantId = Date.now().toString();
 
-    // Add initial assistant message
     if (!isInitial) {
       setMessages(prev => [...prev, {
         id: assistantId,
@@ -173,18 +202,24 @@ export function AssistantChat() {
 
     const updateAssistantMessage = (content: string) => {
       assistantContent = content;
+      const preview = parseDeletionPreview(content);
+      const cleanContent = cleanMessageContent(content);
+      
       setMessages(prev => {
         const last = prev[prev.length - 1];
         if (last?.role === "assistant") {
           return prev.map((m, i) => 
-            i === prev.length - 1 ? { ...m, content: assistantContent } : m
+            i === prev.length - 1 
+              ? { ...m, content: cleanContent, deletionPreview: preview || m.deletionPreview } 
+              : m
           );
         }
         return [...prev, {
           id: assistantId,
           role: "assistant",
-          content: assistantContent,
+          content: cleanContent,
           timestamp: new Date(),
+          deletionPreview: preview,
         }];
       });
     };
@@ -264,7 +299,6 @@ export function AssistantChat() {
     setIsTyping(true);
 
     try {
-      // Build conversation history for context
       const conversationHistory = [
         ...messages.map(m => ({ role: m.role, content: m.content })),
         { role: "user", content: input },
@@ -278,7 +312,6 @@ export function AssistantChat() {
         description: error instanceof Error ? error.message : "Não foi possível enviar a mensagem",
         variant: "destructive",
       });
-      // Remove the failed user message
       setMessages(prev => prev.filter(m => m.id !== userMessage.id));
     } finally {
       setIsTyping(false);
@@ -288,6 +321,64 @@ export function AssistantChat() {
   const handleSuggestionClick = (suggestion: string) => {
     setInput(suggestion);
   };
+
+  const handleDeletionClick = (preview: DestructiveActionPreview) => {
+    setCurrentPreview(preview);
+    setConfirmationOpen(true);
+  };
+
+  const handleConfirmDeletion = useCallback(async (preview: DestructiveActionPreview) => {
+    setIsDeleting(true);
+    try {
+      const result = await deleteTransactionsBatch({
+        householdId: preview.householdId,
+        transactionIds: preview.transactionIds,
+      });
+
+      // Add result message to chat
+      const resultMessage: Message = {
+        id: Date.now().toString(),
+        role: "assistant",
+        content: result.success
+          ? `✅ **${result.deletedCount} lançamentos** foram excluídos com sucesso da família **${preview.householdName}**!`
+          : `⚠️ ${result.message}\n\n${result.failedIds.length > 0 ? `IDs com falha: ${result.failedIds.map(f => f.reason).join(", ")}` : ""}`,
+        timestamp: new Date(),
+      };
+
+      setMessages(prev => [...prev, resultMessage]);
+      setConfirmationOpen(false);
+      setCurrentPreview(null);
+
+      // Clear deletion previews from previous messages
+      setMessages(prev => prev.map(m => ({ ...m, deletionPreview: undefined })));
+
+    } catch (error) {
+      toast({
+        title: "Erro",
+        description: error instanceof Error ? error.message : "Erro ao excluir lançamentos",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [toast]);
+
+  const handleCancelDeletion = useCallback(() => {
+    setConfirmationOpen(false);
+    setCurrentPreview(null);
+
+    // Add cancellation message
+    const cancelMessage: Message = {
+      id: Date.now().toString(),
+      role: "assistant",
+      content: "🚫 Exclusão cancelada. Nenhum dado foi removido.",
+      timestamp: new Date(),
+    };
+    setMessages(prev => [...prev, cancelMessage]);
+
+    // Clear deletion previews
+    setMessages(prev => prev.map(m => ({ ...m, deletionPreview: undefined })));
+  }, []);
 
   if (isInitializing) {
     return (
@@ -333,33 +424,58 @@ export function AssistantChat() {
               {currentHousehold ? `Assistente da ${currentHousehold.name}` : "Seu assistente financeiro"}
             </p>
           </div>
+          <div className="ml-auto flex items-center gap-1 px-2 py-1 bg-accent/10 rounded-full">
+            <div className="w-2 h-2 rounded-full bg-accent animate-pulse" />
+            <span className="text-xs text-accent font-medium">Modo Seguro</span>
+          </div>
         </div>
       </div>
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-hide">
         {messages.map((message) => (
-          <div
-            key={message.id}
-            className={cn(
-              "animate-in-up",
-              message.role === "user" ? "flex justify-end" : "flex justify-start"
-            )}
-          >
+          <div key={message.id}>
             <div
               className={cn(
-                "message-bubble",
-                message.role === "user" ? "user" : "assistant"
+                "animate-in-up",
+                message.role === "user" ? "flex justify-end" : "flex justify-start"
               )}
             >
-              {message.role === "assistant" ? (
-                <div className="prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed [&>p]:mb-2 [&>ul]:mb-2 [&>ul]:ml-4 [&>ol]:mb-2 [&>ol]:ml-4 [&_strong]:text-accent [&_strong]:font-semibold">
-                  <ReactMarkdown>{message.content}</ReactMarkdown>
-                </div>
-              ) : (
-                <div className="text-sm leading-relaxed">{message.content}</div>
-              )}
+              <div
+                className={cn(
+                  "message-bubble",
+                  message.role === "user" ? "user" : "assistant"
+                )}
+              >
+                {message.role === "assistant" ? (
+                  <div className="prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed [&>p]:mb-2 [&>ul]:mb-2 [&>ul]:ml-4 [&>ol]:mb-2 [&>ol]:ml-4 [&_strong]:text-accent [&_strong]:font-semibold">
+                    <ReactMarkdown>{message.content}</ReactMarkdown>
+                  </div>
+                ) : (
+                  <div className="text-sm leading-relaxed">{message.content}</div>
+                )}
+              </div>
             </div>
+            
+            {/* Deletion action button */}
+            {message.deletionPreview && (
+              <div className="flex justify-start mt-2 ml-2">
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => handleDeletionClick(message.deletionPreview!)}
+                  disabled={isDeleting}
+                  className="flex items-center gap-2"
+                >
+                  {isDeleting ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-4 h-4" />
+                  )}
+                  Confirmar Exclusão ({message.deletionPreview.count})
+                </Button>
+              </div>
+            )}
           </div>
         ))}
 
@@ -421,6 +537,14 @@ export function AssistantChat() {
           </Button>
         </div>
       </div>
+
+      {/* Destructive Action Confirmation */}
+      <DestructiveActionConfirmation
+        preview={currentPreview}
+        onConfirm={handleConfirmDeletion}
+        onCancel={handleCancelDeletion}
+        isOpen={confirmationOpen}
+      />
     </div>
   );
 }

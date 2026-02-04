@@ -6,6 +6,26 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+// UUID validation regex
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+// Category labels for display
+const categoryLabels: Record<string, string> = {
+  food: "Alimentação",
+  transport: "Transporte",
+  entertainment: "Lazer",
+  health: "Saúde",
+  education: "Educação",
+  shopping: "Compras",
+  bills: "Contas Fixas",
+  other: "Outros",
+};
+
+const monthNames = [
+  "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+];
+
 // Transaction management functions - now family-scoped
 async function addTransaction(supabase: any, userId: string, householdId: string, data: any): Promise<{ success: boolean; message: string; transaction?: any }> {
   const { data: tx, error } = await supabase
@@ -33,6 +53,11 @@ async function addTransaction(supabase: any, userId: string, householdId: string
 }
 
 async function updateTransaction(supabase: any, householdId: string, id: string, data: any): Promise<{ success: boolean; message: string }> {
+  // Validate UUID
+  if (!UUID_REGEX.test(id)) {
+    return { success: false, message: `ID inválido: "${id}" não é um UUID válido.` };
+  }
+
   const updates: any = {};
   if (data.description) updates.description = data.description;
   if (data.amount !== undefined) updates.amount = data.amount;
@@ -43,7 +68,6 @@ async function updateTransaction(supabase: any, householdId: string, id: string,
   if (data.transaction_date) updates.transaction_date = data.transaction_date;
   if (data.notes !== undefined) updates.notes = data.notes;
 
-  // Ensure we only update transactions from the current household
   const { error } = await supabase
     .from("transactions")
     .update(updates)
@@ -56,41 +80,86 @@ async function updateTransaction(supabase: any, householdId: string, id: string,
   return { success: true, message: "Transação atualizada com sucesso!" };
 }
 
-async function deleteTransaction(supabase: any, householdId: string, id: string): Promise<{ success: boolean; message: string }> {
-  // Ensure we only delete transactions from the current household
-  const { error } = await supabase
+// Preview deletion - returns summary without deleting
+async function previewDeletion(supabase: any, householdId: string, filters: any): Promise<{
+  success: boolean;
+  count: number;
+  transactionIds: string[];
+  sumAmount: number;
+  rangeLabel: string;
+  topCategories: { name: string; count: number }[];
+  message: string;
+}> {
+  let query = supabase
     .from("transactions")
-    .delete()
-    .eq("id", id)
+    .select("id, amount, category, transaction_date")
     .eq("household_id", householdId);
 
+  let rangeLabel = "";
+  const now = new Date();
+
+  // Apply filters
+  if (filters.month !== undefined && filters.year !== undefined) {
+    const start = new Date(filters.year, filters.month, 1).toISOString().split("T")[0];
+    const end = new Date(filters.year, filters.month + 1, 0).toISOString().split("T")[0];
+    query = query.gte("transaction_date", start).lte("transaction_date", end);
+    rangeLabel = `${monthNames[filters.month]}/${filters.year}`;
+  } else if (filters.startDate && filters.endDate) {
+    query = query.gte("transaction_date", filters.startDate).lte("transaction_date", filters.endDate);
+    rangeLabel = `${filters.startDate} a ${filters.endDate}`;
+  } else {
+    // Default: current month
+    const start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0];
+    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split("T")[0];
+    query = query.gte("transaction_date", start).lte("transaction_date", end);
+    rangeLabel = `${monthNames[now.getMonth()]}/${now.getFullYear()}`;
+  }
+
+  if (filters.category) {
+    query = query.eq("category", filters.category);
+    rangeLabel += ` (${categoryLabels[filters.category] || filters.category})`;
+  }
+
+  const { data: transactions, error } = await query;
+
   if (error) {
-    return { success: false, message: `Erro ao excluir: ${error.message}` };
+    return {
+      success: false,
+      count: 0,
+      transactionIds: [],
+      sumAmount: 0,
+      rangeLabel: "",
+      topCategories: [],
+      message: `Erro ao buscar: ${error.message}`,
+    };
   }
-  return { success: true, message: "Transação excluída com sucesso!" };
-}
 
-// Parse AI response for function calls
-function parseAIFunctionCall(content: string): { action: string; params: any } | null {
-  const functionPatterns = [
-    { regex: /\[ADICIONAR:\s*(.+?)\]/i, action: "add" },
-    { regex: /\[EDITAR:\s*(.+?)\]/i, action: "update" },
-    { regex: /\[EXCLUIR:\s*(.+?)\]/i, action: "delete" },
-    { regex: /\[BUSCAR:\s*(.+?)\]/i, action: "search" },
-  ];
+  const txList = transactions || [];
+  const transactionIds = txList.map((t: any) => t.id); // Full UUIDs
+  const sumAmount = txList.reduce((sum: number, t: any) => sum + Math.abs(t.amount), 0);
 
-  for (const pattern of functionPatterns) {
-    const match = content.match(pattern.regex);
-    if (match) {
-      try {
-        const params = JSON.parse(match[1]);
-        return { action: pattern.action, params };
-      } catch {
-        return { action: pattern.action, params: match[1] };
-      }
-    }
-  }
-  return null;
+  const categoryCount: Record<string, number> = {};
+  txList.forEach((t: any) => {
+    const cat = categoryLabels[t.category] || t.category;
+    categoryCount[cat] = (categoryCount[cat] || 0) + 1;
+  });
+
+  const topCategories = Object.entries(categoryCount)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([name, count]) => ({ name, count }));
+
+  return {
+    success: true,
+    count: txList.length,
+    transactionIds,
+    sumAmount,
+    rangeLabel,
+    topCategories,
+    message: txList.length > 0
+      ? `Encontrados ${txList.length} lançamentos para exclusão (${rangeLabel}).`
+      : `Nenhum lançamento encontrado para os filtros especificados.`,
+  };
 }
 
 // Validate user is a member of the household
@@ -118,6 +187,69 @@ async function getHouseholdName(supabase: any, householdId: string): Promise<str
     .single();
   return data?.name || "Família";
 }
+
+// Define AI tools for function calling
+const aiTools = [
+  {
+    type: "function",
+    function: {
+      name: "add_transaction",
+      description: "Adicionar um novo lançamento financeiro. Use para gastos (amount negativo) ou receitas (amount positivo).",
+      parameters: {
+        type: "object",
+        properties: {
+          description: { type: "string", description: "Descrição do lançamento" },
+          amount: { type: "number", description: "Valor em reais. NEGATIVO para gastos, POSITIVO para receitas" },
+          category: { type: "string", enum: ["food", "transport", "entertainment", "health", "education", "shopping", "bills", "other"], description: "Categoria do lançamento" },
+          payment_method: { type: "string", enum: ["pix", "boleto", "card", "cash"], description: "Forma de pagamento" },
+          status: { type: "string", enum: ["paid", "pending"], description: "Status do pagamento" },
+          transaction_date: { type: "string", description: "Data no formato YYYY-MM-DD" },
+          notes: { type: "string", description: "Observações adicionais" },
+        },
+        required: ["description", "amount"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "update_transaction",
+      description: "Atualizar um lançamento existente usando o ID completo (UUID).",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "ID completo (UUID) do lançamento a atualizar" },
+          description: { type: "string" },
+          amount: { type: "number" },
+          category: { type: "string", enum: ["food", "transport", "entertainment", "health", "education", "shopping", "bills", "other"] },
+          payment_method: { type: "string", enum: ["pix", "boleto", "card", "cash"] },
+          status: { type: "string", enum: ["paid", "pending"] },
+          transaction_date: { type: "string" },
+          notes: { type: "string" },
+        },
+        required: ["id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "request_deletion_preview",
+      description: "SEMPRE use esta função antes de qualquer exclusão. Retorna preview do que será excluído para confirmação do usuário. NUNCA execute exclusão diretamente.",
+      parameters: {
+        type: "object",
+        properties: {
+          month: { type: "integer", description: "Mês (0-11). 0=Janeiro, 11=Dezembro" },
+          year: { type: "integer", description: "Ano (ex: 2026)" },
+          category: { type: "string", enum: ["food", "transport", "entertainment", "health", "education", "shopping", "bills", "other"], description: "Filtrar por categoria" },
+          startDate: { type: "string", description: "Data inicial YYYY-MM-DD" },
+          endDate: { type: "string", description: "Data final YYYY-MM-DD" },
+        },
+        required: [],
+      },
+    },
+  },
+];
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -159,9 +291,16 @@ serve(async (req) => {
 
     const { messages, householdId } = await req.json();
 
-    // CRITICAL: Validate householdId is provided
+    // CRITICAL: Validate householdId is provided and is valid UUID
     if (!householdId) {
       return new Response(JSON.stringify({ error: "householdId é obrigatório. Selecione uma família." }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (!UUID_REGEX.test(householdId)) {
+      return new Response(JSON.stringify({ error: "householdId inválido" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -187,7 +326,6 @@ serve(async (req) => {
     const startOfMonth = new Date(currentYear, currentMonth, 1).toISOString().split("T")[0];
     const endOfMonth = new Date(currentYear, currentMonth + 1, 0).toISOString().split("T")[0];
     
-    // ALL QUERIES NOW FILTER BY household_id
     const { data: currentMonthTxs } = await supabase
       .from("transactions")
       .select("*")
@@ -206,20 +344,17 @@ serve(async (req) => {
       .gte("transaction_date", startOfLastMonth)
       .lte("transaction_date", endOfLastMonth);
 
-    // Get accounts for this household
     const { data: accounts } = await supabase
       .from("accounts")
       .select("id, name, balance, type")
       .eq("household_id", householdId)
       .eq("is_active", true);
 
-    // Get categories for this household
     const { data: categories } = await supabase
       .from("categories")
       .select("id, name, icon, color")
       .or(`household_id.eq.${householdId},is_system.eq.true`);
 
-    // Get family members for this household
     const { data: familyMembers } = await supabase
       .from("family_members")
       .select("id, name, role")
@@ -253,40 +388,20 @@ serve(async (req) => {
         byCategory[t.category] = (byCategory[t.category] || 0) + Math.abs(t.amount);
       });
 
-    const lastMonthByCategory: Record<string, number> = {};
-    lastMonthTransactions
-      .filter((t: any) => t.amount < 0)
-      .forEach((t: any) => {
-        lastMonthByCategory[t.category] = (lastMonthByCategory[t.category] || 0) + Math.abs(t.amount);
-      });
-
     const recurringExpenses = transactions.filter((t: any) => t.is_recurring);
-
-    // Calculate total balance across all accounts
     const totalBalance = (accounts || []).reduce((sum: number, acc: any) => sum + acc.balance, 0);
 
-    const monthNames = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
     const currentMonthName = monthNames[currentMonth];
     const lastMonthName = monthNames[currentMonth === 0 ? 11 : currentMonth - 1];
-
-    const categoryLabels: Record<string, string> = {
-      food: "Alimentação",
-      transport: "Transporte",
-      entertainment: "Lazer",
-      health: "Saúde",
-      education: "Educação",
-      shopping: "Compras",
-      bills: "Contas Fixas",
-      other: "Outros"
-    };
 
     const categoryBreakdown = Object.entries(byCategory)
       .sort((a, b) => b[1] - a[1])
       .map(([cat, amount]) => `- ${categoryLabels[cat] || cat}: R$ ${amount.toFixed(2)}`)
       .join("\n");
 
+    // IMPORTANT: Show FULL UUIDs now
     const recentTransactions = transactions.slice(0, 15)
-      .map((t: any) => `- ID: ${t.id.slice(0, 8)} | ${t.description}: R$ ${Math.abs(t.amount).toFixed(2)} (${categoryLabels[t.category] || t.category}) - ${t.transaction_date}`)
+      .map((t: any) => `- ID: ${t.id} | ${t.description}: R$ ${Math.abs(t.amount).toFixed(2)} (${categoryLabels[t.category] || t.category}) - ${t.transaction_date}`)
       .join("\n");
 
     const accountsList = (accounts || [])
@@ -303,7 +418,12 @@ serve(async (req) => {
 - Você APENAS tem acesso aos dados da família "${householdName}" (ID: ${householdId})
 - NUNCA mencione, infira ou use dados de outras famílias
 - Se o usuário perguntar sobre outra família/casa, responda: "Eu só tenho acesso aos dados da família ${householdName}. Para ver dados de outra família, você precisa trocar a família ativa nas configurações."
-- Todas as suas análises, sugestões e respostas devem ser baseadas EXCLUSIVAMENTE nos dados apresentados abaixo
+
+🔒 MODO DE SEGURANÇA - REGRAS CRÍTICAS PARA EXCLUSÕES:
+1. NUNCA execute exclusões diretamente
+2. SEMPRE use a função request_deletion_preview PRIMEIRO
+3. A exclusão real será feita pelo frontend após confirmação dupla do usuário
+4. Ao responder sobre exclusões, SEMPRE informe que o usuário precisa confirmar a ação
 
 INFORMAÇÕES DO USUÁRIO:
 - Nome: ${profile?.display_name || "Usuário"}
@@ -329,39 +449,32 @@ COMPARAÇÃO COM ${lastMonthName.toUpperCase()}:
 GASTOS POR CATEGORIA:
 ${categoryBreakdown || "Nenhum gasto registrado ainda"}
 
-TRANSAÇÕES RECENTES (com IDs para referência):
+TRANSAÇÕES RECENTES (com UUIDs completos):
 ${recentTransactions || "Nenhuma transação registrada"}
 
 DESPESAS RECORRENTES:
 ${recurringExpenses.length > 0 ? recurringExpenses.map((t: any) => `- ${t.description}: R$ ${Math.abs(t.amount).toFixed(2)}`).join("\n") : "Nenhuma despesa recorrente"}
 
-SUAS CAPACIDADES DE GERENCIAMENTO:
-Você pode executar ações diretamente nos lançamentos DESTA FAMÍLIA. Para isso, use os seguintes comandos em sua resposta:
+COMO USAR AS FUNÇÕES:
+- Para ADICIONAR: Use a função add_transaction
+- Para EDITAR: Use a função update_transaction com o ID COMPLETO (UUID)
+- Para EXCLUIR: Use a função request_deletion_preview - isso mostrará um preview e o usuário confirmará
 
-1. ADICIONAR LANÇAMENTO:
-   [ADICIONAR: {"description": "Nome", "amount": -100, "category": "food", "payment_method": "pix", "status": "paid"}]
-   
-2. EDITAR LANÇAMENTO (use o ID das transações listadas):
-   [EDITAR: {"id": "abc12345", "description": "Novo nome", "amount": -150}]
-   
-3. EXCLUIR LANÇAMENTO:
-   [EXCLUIR: {"id": "abc12345"}]
-
-Categorias válidas: food, transport, entertainment, health, education, shopping, bills, other
-Formas de pagamento: pix, boleto, card, cash
-Status: paid, pending
+⚠️ IMPORTANTE SOBRE IDs:
+- Use SEMPRE o UUID completo (ex: 550e8400-e29b-41d4-a716-446655440000)
+- NUNCA use IDs truncados (ex: 550e8400)
+- Se não encontrar o ID exato, peça ao usuário para especificar
 
 INSTRUÇÕES:
 1. Seja amigável, use emojis ocasionalmente
 2. Baseie suas respostas APENAS nos dados da família ${householdName}
-3. Quando o usuário pedir para adicionar, editar ou excluir lançamentos, USE OS COMANDOS ACIMA
+3. Use as FUNÇÕES disponíveis para ações
 4. Sempre confirme a ação executada ao usuário
-5. Use formatação markdown para destacar valores
-6. Sempre responda em português brasileiro
-7. Se o usuário disser "apaga", "exclui", "remove" + descrição, encontre o ID correspondente e execute
-8. Valores de gastos devem ser NEGATIVOS (ex: -100 para um gasto de R$100)
-9. NUNCA invente dados ou transações que não estão na lista acima
-10. Se não houver dados suficientes, diga isso claramente`;
+5. Use formatação markdown
+6. Responda em português brasileiro
+7. Valores de gastos devem ser NEGATIVOS
+8. NUNCA invente dados
+9. Para exclusões, SEMPRE mencione que o Modo de Segurança está ativo`;
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -375,6 +488,8 @@ INSTRUÇÕES:
           { role: "system", content: systemPrompt },
           ...messages,
         ],
+        tools: aiTools,
+        tool_choice: "auto",
         stream: true,
       }),
     });
@@ -400,7 +515,6 @@ INSTRUÇÕES:
       });
     }
 
-    // Process streaming response and execute any function calls
     const reader = response.body?.getReader();
     if (!reader) {
       throw new Error("No reader available");
@@ -409,6 +523,8 @@ INSTRUÇÕES:
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
     let fullContent = "";
+    let toolCalls: any[] = [];
+    let currentToolCall: any = null;
 
     const stream = new ReadableStream({
       async start(controller) {
@@ -420,52 +536,111 @@ INSTRUÇÕES:
             const chunk = decoder.decode(value, { stream: true });
             controller.enqueue(value);
             
-            // Accumulate content for function parsing
             const lines = chunk.split("\n");
             for (const line of lines) {
               if (line.startsWith("data: ") && line !== "data: [DONE]") {
                 try {
                   const json = JSON.parse(line.slice(6));
-                  const content = json.choices?.[0]?.delta?.content;
-                  if (content) fullContent += content;
+                  const delta = json.choices?.[0]?.delta;
+                  
+                  if (delta?.content) {
+                    fullContent += delta.content;
+                  }
+                  
+                  // Handle tool calls
+                  if (delta?.tool_calls) {
+                    for (const tc of delta.tool_calls) {
+                      if (tc.index !== undefined) {
+                        if (!toolCalls[tc.index]) {
+                          toolCalls[tc.index] = { id: tc.id, function: { name: "", arguments: "" } };
+                        }
+                        if (tc.function?.name) {
+                          toolCalls[tc.index].function.name = tc.function.name;
+                        }
+                        if (tc.function?.arguments) {
+                          toolCalls[tc.index].function.arguments += tc.function.arguments;
+                        }
+                      }
+                    }
+                  }
                 } catch { /* ignore parse errors */ }
               }
             }
           }
 
-          // After streaming completes, check for function calls
-          const functionCall = parseAIFunctionCall(fullContent);
-          if (functionCall) {
-            let result: { success: boolean; message: string };
+          // Process tool calls after streaming completes
+          for (const toolCall of toolCalls) {
+            if (!toolCall?.function?.name) continue;
             
-            switch (functionCall.action) {
-              case "add":
-                // Pass householdId to ensure transaction is added to correct family
-                result = await addTransaction(supabase, user.id, householdId, functionCall.params);
-                break;
-              case "update":
-                // Validate transaction belongs to this household before updating
-                result = await updateTransaction(supabase, householdId, functionCall.params.id, functionCall.params);
-                break;
-              case "delete":
-                // Validate transaction belongs to this household before deleting
-                result = await deleteTransaction(supabase, householdId, functionCall.params.id);
-                break;
-              default:
-                result = { success: false, message: "Ação não reconhecida" };
+            let result: any;
+            let args: any = {};
+            
+            try {
+              args = JSON.parse(toolCall.function.arguments || "{}");
+            } catch {
+              console.error("Failed to parse tool args:", toolCall.function.arguments);
+              continue;
             }
 
-            // Send action result as final message
-            const actionResult = `\n\ndata: ${JSON.stringify({
-              choices: [{
-                delta: { content: `\n\n✅ ${result.message}` }
-              }]
-            })}\n\n`;
-            controller.enqueue(encoder.encode(actionResult));
+            console.log(`Executing tool: ${toolCall.function.name}`, args);
+
+            switch (toolCall.function.name) {
+              case "add_transaction":
+                result = await addTransaction(supabase, user.id, householdId, args);
+                break;
+
+              case "update_transaction":
+                if (!args.id || !UUID_REGEX.test(args.id)) {
+                  result = { success: false, message: `ID inválido: "${args.id}". Use o UUID completo.` };
+                } else {
+                  result = await updateTransaction(supabase, householdId, args.id, args);
+                }
+                break;
+
+              case "request_deletion_preview":
+                const preview = await previewDeletion(supabase, householdId, args);
+                // Send special message for frontend to handle
+                const previewMsg = preview.success && preview.count > 0
+                  ? `\n\n🔒 **Modo de Segurança Ativado**\n\n` +
+                    `Encontrei **${preview.count} lançamentos** para exclusão (${preview.rangeLabel}).\n` +
+                    `💰 Valor total: R$ ${preview.sumAmount.toFixed(2)}\n\n` +
+                    `${preview.topCategories.length > 0 ? `📊 Categorias: ${preview.topCategories.map(c => `${c.name} (${c.count})`).join(", ")}\n\n` : ""}` +
+                    `⚠️ **Esta ação não pode ser desfeita.**\n\n` +
+                    `Para confirmar, clique no botão de exclusão que apareceu abaixo.\n\n` +
+                    `<!-- DELETION_PREVIEW:${JSON.stringify({
+                      count: preview.count,
+                      transactionIds: preview.transactionIds,
+                      sumAmount: preview.sumAmount,
+                      rangeLabel: preview.rangeLabel,
+                      topCategories: preview.topCategories,
+                      householdId,
+                      householdName,
+                    })} -->`
+                  : `\n\n${preview.message}`;
+                
+                const previewResult = `data: ${JSON.stringify({
+                  choices: [{ delta: { content: previewMsg } }]
+                })}\n\n`;
+                controller.enqueue(encoder.encode(previewResult));
+                continue; // Don't add standard result message
+
+              default:
+                result = { success: false, message: "Função não reconhecida" };
+            }
+
+            // Send action result as message
+            if (result) {
+              const icon = result.success ? "✅" : "❌";
+              const actionResult = `data: ${JSON.stringify({
+                choices: [{ delta: { content: `\n\n${icon} ${result.message}` } }]
+              })}\n\n`;
+              controller.enqueue(encoder.encode(actionResult));
+            }
           }
 
           controller.close();
         } catch (error) {
+          console.error("Stream error:", error);
           controller.error(error);
         }
       },
