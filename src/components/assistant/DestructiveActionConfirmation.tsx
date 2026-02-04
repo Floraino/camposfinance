@@ -31,6 +31,7 @@ export interface DestructiveActionPreview {
   category?: string;
   sumAmount?: number;
   topCategories?: { name: string; count: number }[];
+  sample?: { id: string; date: string; amount: number; description: string; category: string }[];
 }
 
 interface DestructiveActionConfirmationProps {
