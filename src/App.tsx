@@ -4,7 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
-import { HouseholdProvider } from "@/hooks/useHousehold";
+import { HouseholdProvider, useHousehold } from "@/hooks/useHousehold";
 import { ThemeProvider } from "@/components/providers/ThemeProvider";
 import Dashboard from "./pages/Dashboard";
 import Transactions from "./pages/Transactions";
@@ -12,12 +12,14 @@ import AddTransaction from "./pages/AddTransaction";
 import Assistant from "./pages/Assistant";
 import Settings from "./pages/Settings";
 import Auth from "./pages/Auth";
+import HouseholdSelection from "./pages/HouseholdSelection";
 import NotFound from "./pages/NotFound";
 import { Loader2 } from "lucide-react";
 
 const queryClient = new QueryClient();
 
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
+// Route that requires authentication only
+function AuthenticatedRoute({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
 
   if (isLoading) {
@@ -35,6 +37,31 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+// Route that requires authentication AND a selected household
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const { user, isLoading: authLoading } = useAuth();
+  const { hasSelectedHousehold, isLoading: householdLoading, currentHousehold } = useHousehold();
+
+  if (authLoading || householdLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-primary animate-spin" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Navigate to="/auth" replace />;
+  }
+
+  // If no household is selected, redirect to selection page
+  if (!hasSelectedHousehold || !currentHousehold) {
+    return <Navigate to="/select-household" replace />;
+  }
+
+  return <>{children}</>;
+}
+
 function PublicRoute({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
 
@@ -47,7 +74,7 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
   }
 
   if (user) {
-    return <Navigate to="/" replace />;
+    return <Navigate to="/select-household" replace />;
   }
 
   return <>{children}</>;
@@ -61,6 +88,14 @@ const AppRoutes = () => (
         <PublicRoute>
           <Auth />
         </PublicRoute>
+      }
+    />
+    <Route
+      path="/select-household"
+      element={
+        <AuthenticatedRoute>
+          <HouseholdSelection />
+        </AuthenticatedRoute>
       }
     />
     <Route

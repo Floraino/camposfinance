@@ -33,7 +33,7 @@ export default function Auth() {
             variant: "destructive",
           });
         } else {
-          navigate("/");
+          navigate("/select-household");
         }
       } else {
         if (password.length < 6) {
