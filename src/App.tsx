@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
+import { HouseholdProvider } from "@/hooks/useHousehold";
 import { ThemeProvider } from "@/components/providers/ThemeProvider";
 import Dashboard from "./pages/Dashboard";
 import Transactions from "./pages/Transactions";
@@ -112,9 +113,11 @@ const App = () => (
       <TooltipProvider>
         <BrowserRouter>
           <AuthProvider>
-            <Toaster />
-            <Sonner />
-            <AppRoutes />
+            <HouseholdProvider>
+              <Toaster />
+              <Sonner />
+              <AppRoutes />
+            </HouseholdProvider>
           </AuthProvider>
         </BrowserRouter>
       </TooltipProvider>

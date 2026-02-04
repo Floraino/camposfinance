@@ -1,31 +1,40 @@
 import { useState, useRef, useEffect } from "react";
-import { ChevronRight, Moon, Bell, Shield, Users, Download, Upload, HelpCircle, LogOut, User, Camera, X, Loader2 } from "lucide-react";
+import { ChevronRight, Moon, Bell, Shield, Users, Download, Upload, HelpCircle, LogOut, User, Camera, X, Loader2, Crown, Home, Wallet } from "lucide-react";
 import { MobileLayout } from "@/components/layout/MobileLayout";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
+import { useHousehold } from "@/hooks/useHousehold";
 import { useTheme } from "@/components/providers/ThemeProvider";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { FamilyMembersSheet } from "@/components/settings/FamilyMembersSheet";
+import { FamilyPlanSheet } from "@/components/settings/FamilyPlanSheet";
+import { AccountsSheet } from "@/components/settings/AccountsSheet";
 import { ExportReportSheet } from "@/components/settings/ExportReportSheet";
 import { HelpSheet } from "@/components/settings/HelpSheet";
 import { SecuritySheet } from "@/components/settings/SecuritySheet";
 import { ImportCSVSheet } from "@/components/transactions/ImportCSVSheet";
+import { PlanBadge } from "@/components/paywall/PlanBadge";
+import { UpgradeModal } from "@/components/paywall/UpgradeModal";
 
 export default function Settings() {
   const { profile, user, signOut } = useAuth();
+  const { currentHousehold, planType, isAdmin, canExportReports } = useHousehold();
   const { resolvedTheme, setTheme } = useTheme();
   const navigate = useNavigate();
   const { toast } = useToast();
   
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [showFamilyMembers, setShowFamilyMembers] = useState(false);
+  const [showFamilyPlan, setShowFamilyPlan] = useState(false);
+  const [showAccounts, setShowAccounts] = useState(false);
   const [showExportReport, setShowExportReport] = useState(false);
   const [showImportCSV, setShowImportCSV] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showSecurity, setShowSecurity] = useState(false);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   
   const [displayName, setDisplayName] = useState(profile?.display_name || "");
   const [avatarPreview, setAvatarPreview] = useState<string | null>(profile?.avatar_url || null);
@@ -317,10 +326,57 @@ export default function Settings() {
             <h3 className="text-sm font-medium text-muted-foreground mb-3 px-1">
               Família
             </h3>
-            <div className="glass-card overflow-hidden">
+            
+            {/* Household Card */}
+            <div className="glass-card p-4 mb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-xl bg-primary/20 flex items-center justify-center">
+                  <Home className="w-6 h-6 text-primary" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-foreground">{currentHousehold?.name || "Minha Casa"}</p>
+                  <p className="text-sm text-muted-foreground">
+                    Plano da Família: <span className={planType === "PRO" ? "text-amber-500" : ""}>{planType}</span>
+                  </p>
+                </div>
+                <PlanBadge size="lg" />
+              </div>
+            </div>
+
+            <div className="glass-card divide-y divide-border overflow-hidden">
+              <button 
+                onClick={() => setShowFamilyPlan(true)}
+                className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors"
+              >
+                <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
+                  <Crown className={`w-5 h-5 ${planType === "PRO" ? "text-amber-500" : "text-muted-foreground"}`} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-foreground">Plano da Família</p>
+                  <p className="text-sm text-muted-foreground truncate">
+                    {planType === "PRO" ? "Gerenciar assinatura" : "Ver benefícios Pro"}
+                  </p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-muted-foreground" />
+              </button>
+              <button 
+                onClick={() => setShowAccounts(true)}
+                className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors border-t border-border"
+              >
+                <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
+                  <Wallet className="w-5 h-5 text-muted-foreground" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-foreground">Contas</p>
+                  <p className="text-sm text-muted-foreground truncate">
+                    Carteiras e bancos ({planType === "PRO" ? "ilimitado" : "até 2"})
+                  </p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-muted-foreground" />
+              </button>
               <button 
                 onClick={() => setShowFamilyMembers(true)}
-                className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors"
+                className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors border-t border-border"
               >
                 <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
                   <Users className="w-5 h-5 text-muted-foreground" />
@@ -358,14 +414,17 @@ export default function Settings() {
                 <ChevronRight className="w-5 h-5 text-muted-foreground" />
               </button>
               <button 
-                onClick={() => setShowExportReport(true)}
+                onClick={() => canExportReports ? setShowExportReport(true) : setShowUpgradeModal(true)}
                 className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors"
               >
                 <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
                   <Download className="w-5 h-5 text-muted-foreground" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-medium text-foreground">Exportar Relatório</p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-medium text-foreground">Exportar Relatório</p>
+                    {!canExportReports && <span className="text-xs text-amber-500">PRO</span>}
+                  </div>
                   <p className="text-sm text-muted-foreground truncate">
                     PDF ou Excel
                   </p>
@@ -552,6 +611,19 @@ export default function Settings() {
       <ImportCSVSheet 
         isOpen={showImportCSV} 
         onClose={() => setShowImportCSV(false)} 
+      />
+      <FamilyPlanSheet 
+        isOpen={showFamilyPlan} 
+        onClose={() => setShowFamilyPlan(false)} 
+      />
+      <AccountsSheet 
+        isOpen={showAccounts} 
+        onClose={() => setShowAccounts(false)} 
+      />
+      <UpgradeModal 
+        isOpen={showUpgradeModal} 
+        onClose={() => setShowUpgradeModal(false)} 
+        feature="export"
       />
     </MobileLayout>
   );
