@@ -111,8 +111,11 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
   };
 
   const handleSendImageClick = () => {
-    // For BASIC users, just attach image and go to manual form
-    // For PRO users, will process with OCR
+    // PRO feature - show upgrade modal for BASIC users
+    if (!canUseOCR) {
+      setShowUpgradeModal(true);
+      return;
+    }
     fileInputRef.current?.click();
   };
 
