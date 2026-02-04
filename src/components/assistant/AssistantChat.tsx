@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import odinLogo from "@/assets/odin-logo.png";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { useHousehold } from "@/hooks/useHousehold";
 import ReactMarkdown from "react-markdown";
 
 interface Message {
@@ -23,6 +24,10 @@ export function AssistantChat() {
   const [isInitializing, setIsInitializing] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
+  const { currentHousehold, hasSelectedHousehold } = useHousehold();
+  
+  // Track the household ID to detect changes
+  const previousHouseholdIdRef = useRef<string | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -32,9 +37,34 @@ export function AssistantChat() {
     scrollToBottom();
   }, [messages]);
 
-  // Initialize with a greeting from Clara
+  // CRITICAL: Reset chat when household changes
+  useEffect(() => {
+    const currentHouseholdId = currentHousehold?.id || null;
+    
+    // If household changed, reset the entire chat
+    if (previousHouseholdIdRef.current !== null && previousHouseholdIdRef.current !== currentHouseholdId) {
+      console.log("Household changed, resetting AI chat context");
+      setMessages([]);
+      setIsInitializing(true);
+    }
+    
+    previousHouseholdIdRef.current = currentHouseholdId;
+  }, [currentHousehold?.id]);
+
+  // Initialize with a greeting from the AI
   useEffect(() => {
     const initializeChat = async () => {
+      if (!hasSelectedHousehold || !currentHousehold) {
+        setMessages([{
+          id: "no-household",
+          role: "assistant",
+          content: "Olá! Parece que você ainda não selecionou uma família. Por favor, selecione uma família para que eu possa analisar suas finanças. 🏠",
+          timestamp: new Date(),
+        }]);
+        setIsInitializing(false);
+        return;
+      }
+
       setIsInitializing(true);
       try {
         const { data: { session } } = await supabase.auth.getSession();
@@ -49,9 +79,9 @@ export function AssistantChat() {
           return;
         }
 
-        // Send initial message to get personalized greeting
+        // Send initial message to get personalized greeting with household context
         await streamChat({
-          messages: [{ role: "user", content: "Olá! Me dê uma análise rápida das minhas finanças." }],
+          messages: [{ role: "user", content: `Olá! Me dê uma análise rápida das finanças da família ${currentHousehold.name}.` }],
           isInitial: true,
         });
       } catch (error) {
@@ -59,7 +89,7 @@ export function AssistantChat() {
         setMessages([{
           id: "1",
           role: "assistant",
-          content: "Olá! Sou o Odin, seu assistente financeiro. Como posso te ajudar hoje? 💰",
+          content: `Olá! Sou o Odin, seu assistente financeiro da família **${currentHousehold.name}**. Como posso te ajudar hoje? 💰`,
           timestamp: new Date(),
         }]);
       }
@@ -67,7 +97,7 @@ export function AssistantChat() {
     };
 
     initializeChat();
-  }, []);
+  }, [currentHousehold?.id, hasSelectedHousehold]);
 
   const streamChat = async ({ 
     messages: chatMessages, 
@@ -86,17 +116,40 @@ export function AssistantChat() {
       return;
     }
 
+    if (!currentHousehold) {
+      toast({
+        title: "Nenhuma família selecionada",
+        description: "Por favor, selecione uma família primeiro",
+        variant: "destructive",
+      });
+      return;
+    }
+
     const resp = await fetch(CHAT_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${session.access_token}`,
       },
-      body: JSON.stringify({ messages: chatMessages }),
+      body: JSON.stringify({ 
+        messages: chatMessages,
+        // CRITICAL: Always send the current household ID
+        householdId: currentHousehold.id 
+      }),
     });
 
     if (!resp.ok) {
       const error = await resp.json().catch(() => ({ error: "Erro desconhecido" }));
+      
+      if (resp.status === 403) {
+        toast({
+          title: "Acesso negado",
+          description: "Você não tem permissão para acessar os dados desta família",
+          variant: "destructive",
+        });
+        return;
+      }
+      
       throw new Error(error.error || "Falha ao conectar com a Clara");
     }
 
@@ -190,6 +243,15 @@ export function AssistantChat() {
   const handleSend = async () => {
     if (!input.trim() || isTyping) return;
 
+    if (!currentHousehold) {
+      toast({
+        title: "Nenhuma família selecionada",
+        description: "Por favor, selecione uma família primeiro",
+        variant: "destructive",
+      });
+      return;
+    }
+
     const userMessage: Message = {
       id: Date.now().toString(),
       role: "user",
@@ -236,15 +298,21 @@ export function AssistantChat() {
               <img src={odinLogo} alt="Odin" className="w-full h-full object-cover" />
             </div>
             <div>
-            <h1 className="text-lg font-bold text-foreground">Odin</h1>
-              <p className="text-xs text-muted-foreground">Seu assistente financeiro</p>
+              <h1 className="text-lg font-bold text-foreground">Odin</h1>
+              <p className="text-xs text-muted-foreground">
+                {currentHousehold ? `Assistente da ${currentHousehold.name}` : "Seu assistente financeiro"}
+              </p>
             </div>
           </div>
         </div>
         <div className="flex-1 flex items-center justify-center">
           <div className="flex flex-col items-center gap-3">
             <Loader2 className="w-8 h-8 text-accent animate-spin" />
-            <p className="text-sm text-muted-foreground">Analisando suas finanças...</p>
+            <p className="text-sm text-muted-foreground">
+              {currentHousehold 
+                ? `Analisando finanças da ${currentHousehold.name}...` 
+                : "Carregando..."}
+            </p>
           </div>
         </div>
       </div>
@@ -255,13 +323,15 @@ export function AssistantChat() {
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="px-4 py-4 border-b border-border bg-card/50 backdrop-blur-xl">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full overflow-hidden bg-card">
-              <img src={odinLogo} alt="Odin" className="w-full h-full object-cover" />
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full overflow-hidden bg-card">
+            <img src={odinLogo} alt="Odin" className="w-full h-full object-cover" />
           </div>
           <div>
             <h1 className="text-lg font-bold text-foreground">Odin</h1>
-            <p className="text-xs text-muted-foreground">Seu assistente financeiro</p>
+            <p className="text-xs text-muted-foreground">
+              {currentHousehold ? `Assistente da ${currentHousehold.name}` : "Seu assistente financeiro"}
+            </p>
           </div>
         </div>
       </div>
@@ -311,7 +381,7 @@ export function AssistantChat() {
       {/* Quick Suggestions */}
       <div className="px-4 py-2 border-t border-border">
         <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-2">
-          {["Como economizar?", "Resumo do mês", "Categorizar lançamentos", "Comparar com mês passado"].map((suggestion) => (
+          {["Como economizar?", "Resumo do mês", "Comparar com mês passado", "Gastos por categoria"].map((suggestion) => (
             <button
               key={suggestion}
               onClick={() => handleSuggestionClick(suggestion)}
@@ -328,18 +398,20 @@ export function AssistantChat() {
         <div className="flex gap-3">
           <input
             type="text"
-            placeholder="Pergunte algo sobre suas finanças..."
+            placeholder={currentHousehold 
+              ? `Pergunte sobre as finanças da ${currentHousehold.name}...` 
+              : "Selecione uma família primeiro..."}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
-            disabled={isTyping}
+            disabled={isTyping || !currentHousehold}
             className="mobile-input flex-1"
           />
           <Button
             variant="accent"
             size="icon"
             onClick={handleSend}
-            disabled={!input.trim() || isTyping}
+            disabled={!input.trim() || isTyping || !currentHousehold}
           >
             {isTyping ? (
               <Loader2 className="w-5 h-5 animate-spin" />

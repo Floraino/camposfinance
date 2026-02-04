@@ -6,14 +6,13 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const CATEGORIZE_URL = "https://ldpkatiahdlzbpuvuscd.supabase.co/functions/v1/categorize-transaction";
-
-// Transaction management functions
-async function addTransaction(supabase: any, userId: string, data: any): Promise<{ success: boolean; message: string; transaction?: any }> {
+// Transaction management functions - now family-scoped
+async function addTransaction(supabase: any, userId: string, householdId: string, data: any): Promise<{ success: boolean; message: string; transaction?: any }> {
   const { data: tx, error } = await supabase
     .from("transactions")
     .insert({
       user_id: userId,
+      household_id: householdId,
       description: data.description,
       amount: data.amount,
       category: data.category || "other",
@@ -33,7 +32,7 @@ async function addTransaction(supabase: any, userId: string, data: any): Promise
   return { success: true, message: "Transação adicionada com sucesso!", transaction: tx };
 }
 
-async function updateTransaction(supabase: any, id: string, data: any): Promise<{ success: boolean; message: string }> {
+async function updateTransaction(supabase: any, householdId: string, id: string, data: any): Promise<{ success: boolean; message: string }> {
   const updates: any = {};
   if (data.description) updates.description = data.description;
   if (data.amount !== undefined) updates.amount = data.amount;
@@ -44,10 +43,12 @@ async function updateTransaction(supabase: any, id: string, data: any): Promise<
   if (data.transaction_date) updates.transaction_date = data.transaction_date;
   if (data.notes !== undefined) updates.notes = data.notes;
 
+  // Ensure we only update transactions from the current household
   const { error } = await supabase
     .from("transactions")
     .update(updates)
-    .eq("id", id);
+    .eq("id", id)
+    .eq("household_id", householdId);
 
   if (error) {
     return { success: false, message: `Erro ao atualizar: ${error.message}` };
@@ -55,73 +56,18 @@ async function updateTransaction(supabase: any, id: string, data: any): Promise<
   return { success: true, message: "Transação atualizada com sucesso!" };
 }
 
-async function deleteTransaction(supabase: any, id: string): Promise<{ success: boolean; message: string }> {
+async function deleteTransaction(supabase: any, householdId: string, id: string): Promise<{ success: boolean; message: string }> {
+  // Ensure we only delete transactions from the current household
   const { error } = await supabase
     .from("transactions")
     .delete()
-    .eq("id", id);
+    .eq("id", id)
+    .eq("household_id", householdId);
 
   if (error) {
     return { success: false, message: `Erro ao excluir: ${error.message}` };
   }
   return { success: true, message: "Transação excluída com sucesso!" };
-}
-
-async function searchTransactions(supabase: any, query: string): Promise<any[]> {
-  const { data } = await supabase
-    .from("transactions")
-    .select("id, description, amount, category, transaction_date")
-    .ilike("description", `%${query}%`)
-    .order("transaction_date", { ascending: false })
-    .limit(10);
-  
-  return data || [];
-}
-
-async function recategorizeTransactions(supabase: any, userId: string, apiKey: string): Promise<{ updated: number; total: number }> {
-  const { data: transactions, error } = await supabase
-    .from("transactions")
-    .select("id, description, category");
-
-  if (error || !transactions || transactions.length === 0) {
-    return { updated: 0, total: 0 };
-  }
-
-  const response = await fetch(CATEGORIZE_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      categorizeAll: true,
-      descriptions: transactions.map((t: any) => ({ id: t.id, description: t.description })),
-    }),
-  });
-
-  if (!response.ok) {
-    return { updated: 0, total: transactions.length };
-  }
-
-  const data = await response.json();
-  const categories: { id: string; category: string }[] = data.categories || [];
-
-  let updated = 0;
-  for (const cat of categories) {
-    const original = transactions.find((t: any) => t.id === cat.id);
-    if (cat.category && original && cat.category !== original.category) {
-      const { error: updateError } = await supabase
-        .from("transactions")
-        .update({ category: cat.category })
-        .eq("id", cat.id);
-
-      if (!updateError) {
-        updated++;
-      }
-    }
-  }
-
-  return { updated, total: transactions.length };
 }
 
 // Parse AI response for function calls
@@ -145,6 +91,32 @@ function parseAIFunctionCall(content: string): { action: string; params: any } |
     }
   }
   return null;
+}
+
+// Validate user is a member of the household
+async function validateHouseholdMembership(supabase: any, userId: string, householdId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("household_members")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("household_id", householdId)
+    .single();
+
+  if (error || !data) {
+    console.log(`User ${userId} is not a member of household ${householdId}`);
+    return false;
+  }
+  return true;
+}
+
+// Get household name for context
+async function getHouseholdName(supabase: any, householdId: string): Promise<string> {
+  const { data } = await supabase
+    .from("households")
+    .select("name")
+    .eq("id", householdId)
+    .single();
+  return data?.name || "Família";
 }
 
 serve(async (req) => {
@@ -185,21 +157,29 @@ serve(async (req) => {
       });
     }
 
-    const { messages } = await req.json();
-    const lastMessage = messages[messages.length - 1]?.content?.toLowerCase() || "";
+    const { messages, householdId } = await req.json();
 
-    // Check for categorization request
-    const wantsCategorization = lastMessage.includes("categorizar") || 
-                                lastMessage.includes("categorize") ||
-                                lastMessage.includes("organizar categoria") ||
-                                lastMessage.includes("classificar");
-
-    let categorizationResult: { updated: number; total: number } | null = null;
-    if (wantsCategorization) {
-      categorizationResult = await recategorizeTransactions(supabase, user.id, LOVABLE_API_KEY);
+    // CRITICAL: Validate householdId is provided
+    if (!householdId) {
+      return new Response(JSON.stringify({ error: "householdId é obrigatório. Selecione uma família." }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
-    // Fetch transaction data
+    // CRITICAL: Validate user is a member of this household
+    const isMember = await validateHouseholdMembership(supabase, user.id, householdId);
+    if (!isMember) {
+      return new Response(JSON.stringify({ error: "Você não tem permissão para acessar esta família." }), {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Get household name for personalized responses
+    const householdName = await getHouseholdName(supabase, householdId);
+
+    // Fetch transaction data - FILTERED BY HOUSEHOLD
     const now = new Date();
     const currentMonth = now.getMonth();
     const currentYear = now.getFullYear();
@@ -207,9 +187,11 @@ serve(async (req) => {
     const startOfMonth = new Date(currentYear, currentMonth, 1).toISOString().split("T")[0];
     const endOfMonth = new Date(currentYear, currentMonth + 1, 0).toISOString().split("T")[0];
     
+    // ALL QUERIES NOW FILTER BY household_id
     const { data: currentMonthTxs } = await supabase
       .from("transactions")
       .select("*")
+      .eq("household_id", householdId)
       .gte("transaction_date", startOfMonth)
       .lte("transaction_date", endOfMonth)
       .order("transaction_date", { ascending: false });
@@ -220,8 +202,28 @@ serve(async (req) => {
     const { data: lastMonthTxs } = await supabase
       .from("transactions")
       .select("*")
+      .eq("household_id", householdId)
       .gte("transaction_date", startOfLastMonth)
       .lte("transaction_date", endOfLastMonth);
+
+    // Get accounts for this household
+    const { data: accounts } = await supabase
+      .from("accounts")
+      .select("id, name, balance, type")
+      .eq("household_id", householdId)
+      .eq("is_active", true);
+
+    // Get categories for this household
+    const { data: categories } = await supabase
+      .from("categories")
+      .select("id, name, icon, color")
+      .or(`household_id.eq.${householdId},is_system.eq.true`);
+
+    // Get family members for this household
+    const { data: familyMembers } = await supabase
+      .from("family_members")
+      .select("id, name, role")
+      .eq("household_id", householdId);
 
     const { data: profile } = await supabase
       .from("profiles")
@@ -260,6 +262,9 @@ serve(async (req) => {
 
     const recurringExpenses = transactions.filter((t: any) => t.is_recurring);
 
+    // Calculate total balance across all accounts
+    const totalBalance = (accounts || []).reduce((sum: number, acc: any) => sum + acc.balance, 0);
+
     const monthNames = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
     const currentMonthName = monthNames[currentMonth];
     const lastMonthName = monthNames[currentMonth === 0 ? 11 : currentMonth - 1];
@@ -284,22 +289,37 @@ serve(async (req) => {
       .map((t: any) => `- ID: ${t.id.slice(0, 8)} | ${t.description}: R$ ${Math.abs(t.amount).toFixed(2)} (${categoryLabels[t.category] || t.category}) - ${t.transaction_date}`)
       .join("\n");
 
-    const categorizationInfo = categorizationResult 
-      ? `\n\nAÇÃO EXECUTADA - CATEGORIZAÇÃO AUTOMÁTICA:
-- Total de transações analisadas: ${categorizationResult.total}
-- Transações recategorizadas: ${categorizationResult.updated}
-- ${categorizationResult.updated > 0 ? "As categorias foram atualizadas com sucesso!" : "Todas as transações já estavam bem categorizadas."}`
-      : "";
+    const accountsList = (accounts || [])
+      .map((acc: any) => `- ${acc.name} (${acc.type}): R$ ${acc.balance.toFixed(2)}`)
+      .join("\n");
+
+    const familyMembersList = (familyMembers || [])
+      .map((m: any) => `- ${m.name} (${m.role})`)
+      .join("\n");
 
     const systemPrompt = `Você é o Odin, um assistente financeiro pessoal inteligente do CasaCampos. Você ajuda famílias brasileiras a gerenciar suas finanças domésticas.
 
+⚠️ REGRA CRÍTICA DE ISOLAMENTO:
+- Você APENAS tem acesso aos dados da família "${householdName}" (ID: ${householdId})
+- NUNCA mencione, infira ou use dados de outras famílias
+- Se o usuário perguntar sobre outra família/casa, responda: "Eu só tenho acesso aos dados da família ${householdName}. Para ver dados de outra família, você precisa trocar a família ativa nas configurações."
+- Todas as suas análises, sugestões e respostas devem ser baseadas EXCLUSIVAMENTE nos dados apresentados abaixo
+
 INFORMAÇÕES DO USUÁRIO:
 - Nome: ${profile?.display_name || "Usuário"}
+- Família ativa: ${householdName}
 
-DADOS FINANCEIROS DE ${currentMonthName.toUpperCase()} (COMPARTILHADOS PELA FAMÍLIA):
+CONTAS BANCÁRIAS DA FAMÍLIA ${householdName.toUpperCase()}:
+${accountsList || "Nenhuma conta cadastrada"}
+- Saldo total: R$ ${totalBalance.toFixed(2)}
+
+MEMBROS DA FAMÍLIA:
+${familyMembersList || "Nenhum membro cadastrado"}
+
+DADOS FINANCEIROS DE ${currentMonthName.toUpperCase()} (FAMÍLIA ${householdName.toUpperCase()}):
 - Total de gastos: R$ ${totalExpenses.toFixed(2)}
 - Total de receitas: R$ ${totalIncome.toFixed(2)}
-- Saldo: R$ ${(totalIncome - totalExpenses).toFixed(2)}
+- Saldo do mês: R$ ${(totalIncome - totalExpenses).toFixed(2)}
 - Número de transações: ${transactions.length}
 
 COMPARAÇÃO COM ${lastMonthName.toUpperCase()}:
@@ -314,10 +334,9 @@ ${recentTransactions || "Nenhuma transação registrada"}
 
 DESPESAS RECORRENTES:
 ${recurringExpenses.length > 0 ? recurringExpenses.map((t: any) => `- ${t.description}: R$ ${Math.abs(t.amount).toFixed(2)}`).join("\n") : "Nenhuma despesa recorrente"}
-${categorizationInfo}
 
 SUAS CAPACIDADES DE GERENCIAMENTO:
-Você pode executar ações diretamente nos lançamentos. Para isso, use os seguintes comandos em sua resposta:
+Você pode executar ações diretamente nos lançamentos DESTA FAMÍLIA. Para isso, use os seguintes comandos em sua resposta:
 
 1. ADICIONAR LANÇAMENTO:
    [ADICIONAR: {"description": "Nome", "amount": -100, "category": "food", "payment_method": "pix", "status": "paid"}]
@@ -334,13 +353,15 @@ Status: paid, pending
 
 INSTRUÇÕES:
 1. Seja amigável, use emojis ocasionalmente
-2. Baseie suas respostas nos dados reais da família
+2. Baseie suas respostas APENAS nos dados da família ${householdName}
 3. Quando o usuário pedir para adicionar, editar ou excluir lançamentos, USE OS COMANDOS ACIMA
 4. Sempre confirme a ação executada ao usuário
 5. Use formatação markdown para destacar valores
 6. Sempre responda em português brasileiro
 7. Se o usuário disser "apaga", "exclui", "remove" + descrição, encontre o ID correspondente e execute
-8. Valores de gastos devem ser NEGATIVOS (ex: -100 para um gasto de R$100)`;
+8. Valores de gastos devem ser NEGATIVOS (ex: -100 para um gasto de R$100)
+9. NUNCA invente dados ou transações que não estão na lista acima
+10. Se não houver dados suficientes, diga isso claramente`;
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -419,13 +440,16 @@ INSTRUÇÕES:
             
             switch (functionCall.action) {
               case "add":
-                result = await addTransaction(supabase, user.id, functionCall.params);
+                // Pass householdId to ensure transaction is added to correct family
+                result = await addTransaction(supabase, user.id, householdId, functionCall.params);
                 break;
               case "update":
-                result = await updateTransaction(supabase, functionCall.params.id, functionCall.params);
+                // Validate transaction belongs to this household before updating
+                result = await updateTransaction(supabase, householdId, functionCall.params.id, functionCall.params);
                 break;
               case "delete":
-                result = await deleteTransaction(supabase, functionCall.params.id);
+                // Validate transaction belongs to this household before deleting
+                result = await deleteTransaction(supabase, householdId, functionCall.params.id);
                 break;
               default:
                 result = { success: false, message: "Ação não reconhecida" };
