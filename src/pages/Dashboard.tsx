@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Bell, ChevronRight, TrendingDown, Wallet, Loader2, ScanLine, Plus, Settings, ChevronLeft } from "lucide-react";
+import { Bell, ChevronRight, TrendingDown, Wallet, Loader2, ScanLine, Plus, Settings, ChevronLeft, Crown } from "lucide-react";
 import odinLogo from "@/assets/odin-logo.png";
 import { MobileLayout } from "@/components/layout/MobileLayout";
 import { StatCard } from "@/components/ui/StatCard";
@@ -22,7 +22,7 @@ import { supabase } from "@/integrations/supabase/client";
 export default function Dashboard() {
   const navigate = useNavigate();
   const { profile, isLoading: authLoading } = useAuth();
-  const { currentHousehold, hasSelectedHousehold, isLoading: householdLoading } = useHousehold();
+  const { currentHousehold, hasSelectedHousehold, isLoading: householdLoading, canUseOCR, planType } = useHousehold();
   const { toast } = useToast();
   
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -347,14 +347,26 @@ export default function Dashboard() {
         <div className="flex gap-3 mb-6">
           <button
             onClick={() => setShowScanner(true)}
-            className="flex-1 glass-card p-4 flex items-center gap-3 touch-feedback"
+            className="flex-1 glass-card p-4 flex items-center gap-3 touch-feedback relative"
           >
-            <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center">
+            <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center relative">
               <ScanLine className="w-5 h-5 text-primary" />
+              {planType === "BASIC" && (
+                <div className="absolute -top-1 -right-1 w-5 h-5 bg-amber-500 rounded-full flex items-center justify-center">
+                  <Crown className="w-3 h-3 text-white" />
+                </div>
+              )}
             </div>
-            <div className="text-left">
-              <p className="text-sm font-medium text-foreground">Escanear Cupom</p>
-              <p className="text-xs text-muted-foreground">Leitura com IA</p>
+            <div className="text-left flex-1">
+              <div className="flex items-center gap-1.5">
+                <p className="text-sm font-medium text-foreground">Escanear Cupom</p>
+                {planType === "BASIC" && (
+                  <span className="text-[10px] font-semibold text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded">PRO</span>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {canUseOCR ? "Leitura com IA" : "Recurso PRO"}
+              </p>
             </div>
           </button>
           <button
@@ -507,6 +519,10 @@ export default function Dashboard() {
         isOpen={showScanner}
         onClose={() => setShowScanner(false)}
         onTransactionAdded={loadData}
+        onContinueManually={() => {
+          setShowScanner(false);
+          setShowAddSheet(true);
+        }}
         householdId={currentHousehold.id}
       />
 
