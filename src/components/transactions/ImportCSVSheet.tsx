@@ -777,6 +777,7 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                         <TableHeader>
                           <TableRow>
                             <TableHead className="w-[40px]">#</TableHead>
+                            <TableHead>Data</TableHead>
                             <TableHead>Descrição</TableHead>
                             <TableHead className="text-right">Valor</TableHead>
                             <TableHead>Tipo</TableHead>
@@ -786,7 +787,16 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                           {parsedRows.filter(r => r.status === "OK").slice(0, 30).map((row) => (
                             <TableRow key={row.rowIndex}>
                               <TableCell className="text-xs text-muted-foreground">{row.rowIndex}</TableCell>
-                              <TableCell className="text-sm truncate max-w-[120px]">
+                              <TableCell className="text-sm">
+                                {row.parsed?.transaction_date ? (
+                                  <span className="text-foreground">
+                                    {new Date(row.parsed.transaction_date + 'T00:00:00').toLocaleDateString('pt-BR')}
+                                  </span>
+                                ) : (
+                                  <span className="text-muted-foreground">-</span>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-sm truncate max-w-[100px]">
                                 {row.parsed?.description}
                               </TableCell>
                               <TableCell className={`text-right text-sm font-medium ${row.parsed?.type === "INCOME" ? "text-success" : "text-destructive"}`}>
