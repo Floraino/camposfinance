@@ -46,6 +46,8 @@ export interface ParsedRow {
   errors: string[];
   reason?: string; // Human-readable reason for SKIPPED/ERROR
   isDuplicate?: boolean;
+  requiresDateConfirmation?: boolean; // When date is missing and user needs to confirm using today
+  originalDateStr?: string; // Original date string from CSV for display
 }
 
 export interface ImportResult {
@@ -450,13 +452,22 @@ export function parseCSVWithMappings(
       }
     }
 
-    // Parse date
+    // Parse date - NEVER default to today silently
     const dateStr = dateCol ? cells[dateCol.csvIndex] : "";
-    let transaction_date = parseDate(dateStr, dateFormat);
+    const transaction_date = parseDate(dateStr, dateFormat);
+    
+    // Track if date is missing or invalid
+    let dateWarning: string | null = null;
+    let requiresDateConfirmation = false;
+    
     if (!transaction_date) {
-      transaction_date = formatDateISO(new Date()); // Default to today
       if (dateStr && dateStr.trim()) {
-        errors.push(`Data não reconhecida: "${dateStr}" (usando data atual)`);
+        // Date column exists but value is invalid
+        errors.push(`Data inválida: "${dateStr}"`);
+      } else {
+        // No date value at all
+        dateWarning = "Data não encontrada no extrato";
+        requiresDateConfirmation = true;
       }
     }
 
@@ -471,14 +482,32 @@ export function parseCSVWithMappings(
     // Notes
     const notes = notesCol ? cells[notesCol.csvIndex] : undefined;
 
-    // Determine final status
-    const criticalErrors = errors.filter(e => 
-      !e.includes("data atual") && 
-      e !== "Entrada e Saída vazias"
-    );
-
-    if (amount !== null && amount !== 0 && criticalErrors.length === 0) {
-      // For expense, store as negative amount in the database (consistent with existing logic)
+    // Determine final status - date errors are critical now
+    const hasDateError = !transaction_date && (errors.some(e => e.includes("Data inválida")) || requiresDateConfirmation);
+    const hasAmountError = amount === null || amount === 0;
+    
+    if (errors.includes("Entrada e Saída vazias")) {
+      results.push({
+        rowIndex: i + 1,
+        raw: line,
+        status: "SKIPPED",
+        parsed: null,
+        errors: [],
+        reason: "Entrada e Saída vazias",
+      });
+    } else if (hasDateError && !hasAmountError) {
+      // Has amount but no valid date - mark as error, not OK with fallback
+      results.push({
+        rowIndex: i + 1,
+        raw: line,
+        status: "ERROR",
+        parsed: null,
+        errors: errors.length > 0 ? errors : [dateWarning || "Data não encontrada"],
+        reason: dateWarning || errors[0] || "Data inválida ou ausente",
+        requiresDateConfirmation,
+      } as ParsedRow);
+    } else if (!hasAmountError && transaction_date) {
+      // Valid amount AND valid date - OK
       const finalAmount = transactionType === "EXPENSE" ? -Math.abs(amount) : Math.abs(amount);
 
       results.push({
@@ -496,18 +525,10 @@ export function parseCSVWithMappings(
           notes: notes?.substring(0, 500),
           import_hash: generateImportHash(transaction_date, finalAmount, description),
         },
-        errors: errors.filter(e => e.includes("data atual")),
-      });
-    } else if (errors.includes("Entrada e Saída vazias")) {
-      results.push({
-        rowIndex: i + 1,
-        raw: line,
-        status: "SKIPPED",
-        parsed: null,
         errors: [],
-        reason: "Entrada e Saída vazias",
       });
     } else {
+      // Missing amount or other critical errors
       results.push({
         rowIndex: i + 1,
         raw: line,
@@ -655,7 +676,7 @@ export function parseStandardCSV(csvContent: string): ParsedRow[] {
     
     const [dateStr, description, typeStr, valorStr, categoryStr, paymentStr] = cells;
     
-    // Parse date
+    // Parse date - NEVER default to today silently
     const transaction_date = parseDate(dateStr);
     if (!transaction_date) {
       results.push({
@@ -663,8 +684,9 @@ export function parseStandardCSV(csvContent: string): ParsedRow[] {
         raw: line,
         status: "ERROR",
         parsed: null,
-        errors: [`Data inválida: "${dateStr}"`],
-        reason: `Data inválida: "${dateStr}"`,
+        errors: [dateStr ? `Data inválida: "${dateStr}"` : "Data não encontrada"],
+        reason: dateStr ? `Data inválida: "${dateStr}"` : "Data não encontrada na linha",
+        requiresDateConfirmation: !dateStr,
       });
       continue;
     }

@@ -197,13 +197,20 @@ Your task:
    - amount (valor - ONLY if single column with positive/negative values)
    - entrada (valor de entrada/receita - if separate column exists)
    - saida (valor de saída/despesa - if separate column exists)  
-   - date (data - look for date patterns like "dd/mm/yyyy" or "yyyy-mm-dd")
+   - date (data - CRITICAL: look for columns with date patterns like "dd/mm/yyyy", "yyyy-mm-dd", "Data", "Data Mov.", "Data da transação", "Dt", "Movimentação")
    - description (descrição - usually the longest text field, establishment names, histórico)
    - category (categoria - optional, may not exist)
    - payment_method (forma de pagamento - optional: pix, boleto, cartão, dinheiro)
    - notes (observações - optional)
 
 2. Detect the date format used (e.g., "dd/MM/yyyy", "yyyy-MM-dd")
+
+CRITICAL DATE DETECTION RULES:
+- The date column is the MOST IMPORTANT mapping - prioritize finding it
+- Look for column names containing: "data", "date", "dt", "dia", "movimentação", "mov", "vencimento"
+- Dates can appear as: "05/01/2026", "2026-01-05", "05-01-2026", "05/01/26"
+- If a column has values matching date patterns (dd/mm/yyyy, yyyy-mm-dd), map it as "date"
+- NEVER confuse date columns with description or other columns
 
 IMPORTANT RULES:
 - If the CSV has separate "Entrada" and "Saída" columns, map them as "entrada" and "saida" respectively
