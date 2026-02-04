@@ -4,9 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { useHousehold } from "@/hooks/useHousehold";
+import { useProFeature } from "@/hooks/useProFeature";
 import { ReceiptReviewSheet, type ExtractedReceipt } from "./ReceiptReviewSheet";
 import { UpgradeModal } from "@/components/paywall/UpgradeModal";
+import { ProBadge } from "@/components/paywall/ProBadge";
 
 interface ReceiptScannerProps {
   isOpen: boolean;
@@ -25,7 +26,7 @@ export function ReceiptScanner({ isOpen, onClose, onTransactionAdded, onContinue
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
-  const { canUseOCR } = useHousehold();
+  const { allowed: canUseOCR } = useProFeature("OCR_SCAN");
 
   const handleFileSelect = async (file: File) => {
     // Check if OCR is allowed (PRO only)
@@ -184,11 +185,7 @@ export function ReceiptScanner({ isOpen, onClose, onTransactionAdded, onContinue
                 <div className="text-center mb-4">
                   <div className="w-24 h-24 bg-accent/10 rounded-full flex items-center justify-center mx-auto mb-4 relative">
                     <ScanLine className="w-12 h-12 text-accent" />
-                    {!canUseOCR && (
-                      <div className="absolute -top-1 -right-1 w-7 h-7 bg-amber-500 rounded-full flex items-center justify-center">
-                        <Crown className="w-4 h-4 text-white" />
-                      </div>
-                    )}
+                    <ProBadge show={!canUseOCR} size="md" iconOnly className="absolute -top-1 -right-1" />
                   </div>
                   <h3 className="text-lg font-semibold text-foreground mb-2">
                     Leitura Automática

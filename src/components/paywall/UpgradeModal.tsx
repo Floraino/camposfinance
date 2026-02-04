@@ -2,52 +2,48 @@ import { X, Crown, ScanLine, Wallet, Brain, FileText, Check, Upload } from "luci
 import { Button } from "@/components/ui/button";
 import { useHousehold } from "@/hooks/useHousehold";
 import { PRO_PRICING, PLAN_COMPARISON } from "@/services/planService";
+import { type ProFeatureKey, PRO_FEATURES } from "@/lib/proFeatures";
+
+// Legacy feature type mapping for backward compatibility
+type LegacyFeature = "ocr" | "accounts" | "ai" | "export" | "csv";
+
+// Map legacy feature names to new ProFeatureKey
+const legacyToProFeatureKey: Record<LegacyFeature, ProFeatureKey> = {
+  ocr: "OCR_SCAN",
+  accounts: "UNLIMITED_ACCOUNTS",
+  ai: "AI_ASSISTANT",
+  export: "DATA_EXPORT",
+  csv: "CSV_IMPORT",
+};
 
 interface UpgradeModalProps {
   isOpen: boolean;
   onClose: () => void;
-  feature?: "ocr" | "accounts" | "ai" | "export" | "csv";
+  feature?: LegacyFeature | ProFeatureKey;
   onUpgrade?: () => void;
   onContinueManually?: () => void;
 }
 
-const featureMessages = {
-  ocr: {
-    icon: ScanLine,
-    title: "OCR Automático",
-    description: "Leitura automática de cupons fiscais, notas e comprovantes com extração inteligente de dados.",
-    showManualOption: true,
-  },
-  accounts: {
-    icon: Wallet,
-    title: "Contas Ilimitadas",
-    description: "Famílias no plano Basic podem ter até 2 contas. Atualize para criar quantas precisar.",
-    showManualOption: false,
-  },
-  ai: {
-    icon: Brain,
-    title: "IA Financeira Completa",
-    description: "Análises avançadas, sugestões personalizadas e alertas inteligentes para sua família.",
-    showManualOption: false,
-  },
-  export: {
-    icon: FileText,
-    title: "Exportação de Relatórios",
-    description: "Exporte seus dados em PDF e Excel para análise detalhada.",
-    showManualOption: false,
-  },
-  csv: {
-    icon: Upload,
-    title: "Importação CSV",
-    description: "Importe transações de planilhas e extratos bancários automaticamente.",
-    showManualOption: false,
-  },
+const featureIcons = {
+  scan: ScanLine,
+  image: Upload,
+  file: Upload,
+  download: FileText,
+  sparkles: Brain,
+  wallet: Wallet,
 };
 
 export function UpgradeModal({ isOpen, onClose, feature = "ocr", onUpgrade, onContinueManually }: UpgradeModalProps) {
   const { isAdmin, currentHousehold } = useHousehold();
-  const featureInfo = featureMessages[feature];
-  const Icon = featureInfo.icon;
+  
+  // Resolve feature key (handle both legacy and new format)
+  const featureKey: ProFeatureKey = feature in legacyToProFeatureKey 
+    ? legacyToProFeatureKey[feature as LegacyFeature]
+    : feature as ProFeatureKey;
+  
+  const featureConfig = PRO_FEATURES[featureKey];
+  const Icon = featureIcons[featureConfig.icon];
+  const showManualOption = !!featureConfig.manualAlternative;
 
   if (!isOpen) return null;
 
@@ -87,8 +83,8 @@ export function UpgradeModal({ isOpen, onClose, feature = "ocr", onUpgrade, onCo
                 <Icon className="w-6 h-6 text-amber-500" />
               </div>
               <div>
-                <h3 className="font-semibold text-foreground mb-1">{featureInfo.title}</h3>
-                <p className="text-sm text-muted-foreground">{featureInfo.description}</p>
+                <h3 className="font-semibold text-foreground mb-1">{featureConfig.name}</h3>
+                <p className="text-sm text-muted-foreground">{featureConfig.description}</p>
               </div>
             </div>
           </div>
@@ -173,7 +169,7 @@ export function UpgradeModal({ isOpen, onClose, feature = "ocr", onUpgrade, onCo
                 <Crown className="w-5 h-5 mr-2" />
                 Ativar Pro para a Família
               </Button>
-              {featureInfo.showManualOption && onContinueManually && (
+              {showManualOption && onContinueManually && (
                 <Button 
                   variant="outline"
                   className="w-full"
@@ -182,7 +178,7 @@ export function UpgradeModal({ isOpen, onClose, feature = "ocr", onUpgrade, onCo
                     onClose();
                   }}
                 >
-                  Continuar manualmente
+                  {featureConfig.manualAlternative || "Continuar manualmente"}
                 </Button>
               )}
             </div>
@@ -194,7 +190,7 @@ export function UpgradeModal({ isOpen, onClose, feature = "ocr", onUpgrade, onCo
               <p className="text-xs text-muted-foreground">
                 Peça ao dono da casa "{currentHousehold?.name}" para fazer o upgrade.
               </p>
-              {featureInfo.showManualOption && onContinueManually && (
+              {showManualOption && onContinueManually && (
                 <Button 
                   variant="outline"
                   className="w-full"
@@ -203,7 +199,7 @@ export function UpgradeModal({ isOpen, onClose, feature = "ocr", onUpgrade, onCo
                     onClose();
                   }}
                 >
-                  Continuar manualmente
+                  {featureConfig.manualAlternative || "Continuar manualmente"}
                 </Button>
               )}
             </div>

@@ -13,17 +13,22 @@ import { type CategoryType } from "@/components/ui/CategoryBadge";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { useHousehold } from "@/hooks/useHousehold";
+import { useProFeature } from "@/hooks/useProFeature";
 import { getTransactions, addTransaction, getMonthlyStats, getMonthlyEvolution, type Transaction, type NewTransaction, type MonthlyExpense } from "@/services/transactionService";
 import { getCurrentBudget, type Budget } from "@/services/budgetService";
 import { useToast } from "@/hooks/use-toast";
 import { Progress } from "@/components/ui/progress";
 import { supabase } from "@/integrations/supabase/client";
+import { ProBadge } from "@/components/paywall/ProBadge";
 
 export default function Dashboard() {
   const navigate = useNavigate();
   const { profile, isLoading: authLoading } = useAuth();
-  const { currentHousehold, hasSelectedHousehold, isLoading: householdLoading, canUseOCR, planType } = useHousehold();
+  const { currentHousehold, hasSelectedHousehold, isLoading: householdLoading, planType } = useHousehold();
   const { toast } = useToast();
+  
+  // Use centralized PRO feature check for OCR
+  const ocrFeature = useProFeature("OCR_SCAN");
   
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [showAddSheet, setShowAddSheet] = useState(false);
@@ -351,21 +356,17 @@ export default function Dashboard() {
           >
             <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center relative">
               <ScanLine className="w-5 h-5 text-primary" />
-              {planType === "BASIC" && (
-                <div className="absolute -top-1 -right-1 w-5 h-5 bg-amber-500 rounded-full flex items-center justify-center">
-                  <Crown className="w-3 h-3 text-white" />
-                </div>
-              )}
+              <ProBadge show={!ocrFeature.allowed} size="sm" iconOnly className="absolute -top-1 -right-1" />
             </div>
             <div className="text-left flex-1">
               <div className="flex items-center gap-1.5">
                 <p className="text-sm font-medium text-foreground">Escanear Cupom</p>
-                {planType === "BASIC" && (
+                {!ocrFeature.allowed && (
                   <span className="text-[10px] font-semibold text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded">PRO</span>
                 )}
               </div>
               <p className="text-xs text-muted-foreground">
-                {canUseOCR ? "Leitura com IA" : "Recurso PRO"}
+                {ocrFeature.allowed ? "Leitura com IA" : "Recurso PRO"}
               </p>
             </div>
           </button>
