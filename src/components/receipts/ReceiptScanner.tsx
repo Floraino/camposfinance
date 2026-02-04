@@ -8,6 +8,9 @@ import { useProFeature } from "@/hooks/useProFeature";
 import { ReceiptReviewSheet, type ExtractedReceipt } from "./ReceiptReviewSheet";
 import { UpgradeModal } from "@/components/paywall/UpgradeModal";
 import { ProBadge } from "@/components/paywall/ProBadge";
+import { isNativeApp } from "@/lib/platform";
+import { pickImage, requestCameraPermissions } from "@/lib/nativeCamera";
+import { pickImageFile, readImageAsBase64 } from "@/lib/nativeFilePicker";
 
 interface ReceiptScannerProps {
   isOpen: boolean;
@@ -27,6 +30,63 @@ export function ReceiptScanner({ isOpen, onClose, onTransactionAdded, onContinue
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
   const { allowed: canUseOCR } = useProFeature("OCR_SCAN");
+
+  // Handle camera button click - use native camera on mobile
+  const handleCameraClick = async () => {
+    if (!canUseOCR) {
+      setShowUpgradeModal(true);
+      return;
+    }
+
+    if (isNativeApp()) {
+      try {
+        const image = await pickImage("camera");
+        if (image) {
+          // Show preview using data URL
+          const dataUrl = `data:${image.mimeType};base64,${image.base64}`;
+          setPreviewUrl(dataUrl);
+          await processImage(image.base64, image.mimeType);
+        }
+      } catch (error) {
+        console.error("Camera error:", error);
+        toast({
+          title: "Erro ao acessar câmera",
+          description: "Verifique as permissões do app",
+          variant: "destructive",
+        });
+      }
+    } else {
+      cameraInputRef.current?.click();
+    }
+  };
+
+  // Handle gallery button click - use native picker on mobile
+  const handleGalleryClick = async () => {
+    if (!canUseOCR) {
+      setShowUpgradeModal(true);
+      return;
+    }
+
+    if (isNativeApp()) {
+      try {
+        const image = await pickImage("gallery");
+        if (image) {
+          const dataUrl = `data:${image.mimeType};base64,${image.base64}`;
+          setPreviewUrl(dataUrl);
+          await processImage(image.base64, image.mimeType);
+        }
+      } catch (error) {
+        console.error("Gallery error:", error);
+        toast({
+          title: "Erro ao acessar galeria",
+          description: "Verifique as permissões do app",
+          variant: "destructive",
+        });
+      }
+    } else {
+      fileInputRef.current?.click();
+    }
+  };
 
   const handleFileSelect = async (file: File) => {
     // Check if OCR is allowed (PRO only)
@@ -203,7 +263,7 @@ export function ReceiptScanner({ isOpen, onClose, onTransactionAdded, onContinue
                   <Button
                     variant="outline"
                     className={`flex-1 h-24 flex-col gap-2 ${!canUseOCR ? 'opacity-60' : ''}`}
-                    onClick={() => canUseOCR ? cameraInputRef.current?.click() : setShowUpgradeModal(true)}
+                    onClick={handleCameraClick}
                   >
                     <Camera className="w-6 h-6" />
                     <span className="text-xs">Câmera</span>
@@ -211,7 +271,7 @@ export function ReceiptScanner({ isOpen, onClose, onTransactionAdded, onContinue
                   <Button
                     variant="outline"
                     className={`flex-1 h-24 flex-col gap-2 ${!canUseOCR ? 'opacity-60' : ''}`}
-                    onClick={() => canUseOCR ? fileInputRef.current?.click() : setShowUpgradeModal(true)}
+                    onClick={handleGalleryClick}
                   >
                     <Upload className="w-6 h-6" />
                     <span className="text-xs">Galeria</span>
@@ -220,7 +280,7 @@ export function ReceiptScanner({ isOpen, onClose, onTransactionAdded, onContinue
 
                 {!canUseOCR && (
                   <Button 
-                    className="w-full max-w-xs bg-gradient-to-r from-amber-500 to-orange-500 text-white"
+                    className="w-full max-w-xs bg-gradient-to-r from-warning to-accent text-warning-foreground"
                     onClick={() => setShowUpgradeModal(true)}
                   >
                     <Crown className="w-4 h-4 mr-2" />
@@ -228,6 +288,7 @@ export function ReceiptScanner({ isOpen, onClose, onTransactionAdded, onContinue
                   </Button>
                 )}
 
+                {/* Hidden inputs for web fallback */}
                 <input
                   ref={cameraInputRef}
                   type="file"

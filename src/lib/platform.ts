@@ -49,10 +49,7 @@ export function canUseStripeInApp(): boolean {
  * This is used when in-app Stripe is not allowed
  */
 export function getSubscriptionWebUrl(householdId: string, priceType: "monthly" | "yearly"): string {
-  const baseUrl = import.meta.env.VITE_SUPABASE_URL 
-    ? "https://camposfinance.lovable.app" 
-    : window.location.origin;
-  
+  const baseUrl = "https://camposfinance.lovable.app";
   return `${baseUrl}/subscribe?householdId=${householdId}&plan=${priceType}`;
 }
 
@@ -63,9 +60,9 @@ export function getSubscriptionWebUrl(householdId: string, priceType: "monthly" 
 export async function openExternalUrl(url: string): Promise<void> {
   if (isNativeApp()) {
     try {
-      // Use Capacitor Browser plugin if available
+      // Use Capacitor Browser plugin
       const { Browser } = await import("@capacitor/browser");
-      await Browser.open({ url });
+      await Browser.open({ url, presentationStyle: "popover" });
     } catch {
       // Fallback to window.open
       window.open(url, "_blank");
@@ -73,4 +70,34 @@ export async function openExternalUrl(url: string): Promise<void> {
   } else {
     window.open(url, "_blank");
   }
+}
+
+/**
+ * Close the in-app browser (if open)
+ */
+export async function closeExternalBrowser(): Promise<void> {
+  if (isNativeApp()) {
+    try {
+      const { Browser } = await import("@capacitor/browser");
+      await Browser.close();
+    } catch {
+      // Ignore errors
+    }
+  }
+}
+
+/**
+ * Add listener for browser finished event
+ */
+export async function onBrowserFinished(callback: () => void): Promise<() => void> {
+  if (isNativeApp()) {
+    try {
+      const { Browser } = await import("@capacitor/browser");
+      const listener = await Browser.addListener("browserFinished", callback);
+      return () => listener.remove();
+    } catch {
+      return () => {};
+    }
+  }
+  return () => {};
 }
