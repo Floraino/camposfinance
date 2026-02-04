@@ -90,10 +90,10 @@ export function AccountsSheet({ isOpen, onClose }: AccountsSheetProps) {
   };
 
   const handleDeleteAccount = async (account: Account) => {
-    if (!confirm(`Tem certeza que deseja excluir "${account.name}"?`)) return;
+    if (!currentHousehold || !confirm(`Tem certeza que deseja excluir "${account.name}"?`)) return;
 
     try {
-      await deleteAccount(account.id);
+      await deleteAccount(account.id, currentHousehold.id);
       toast({
         title: "Conta excluída",
         description: `${account.name} foi removida.`,

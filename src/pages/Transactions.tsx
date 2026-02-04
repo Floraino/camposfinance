@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { Search, Filter, ChevronDown, Loader2 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { MobileLayout } from "@/components/layout/MobileLayout";
 import { TransactionCard, type Transaction as UITransaction } from "@/components/transactions/TransactionCard";
 import { EditTransactionSheet } from "@/components/transactions/EditTransactionSheet";
@@ -7,10 +8,13 @@ import { CategoryBadge, categoryConfig, type CategoryType } from "@/components/u
 import { cn } from "@/lib/utils";
 import { getTransactions, type Transaction } from "@/services/transactionService";
 import { useToast } from "@/hooks/use-toast";
+import { useHousehold } from "@/hooks/useHousehold";
 
 type FilterCategory = "all" | CategoryType;
 
 export default function Transactions() {
+  const navigate = useNavigate();
+  const { currentHousehold, hasSelectedHousehold, isLoading: householdLoading } = useHousehold();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -20,14 +24,25 @@ export default function Transactions() {
   const [showEditSheet, setShowEditSheet] = useState(false);
   const { toast } = useToast();
 
+  // Redirect to household selection if no household selected
   useEffect(() => {
-    loadTransactions();
-  }, []);
+    if (!householdLoading && !hasSelectedHousehold) {
+      navigate("/select-household");
+    }
+  }, [householdLoading, hasSelectedHousehold, navigate]);
+
+  useEffect(() => {
+    if (currentHousehold?.id) {
+      loadTransactions();
+    }
+  }, [currentHousehold?.id]);
 
   const loadTransactions = async () => {
+    if (!currentHousehold?.id) return;
+
     try {
       setIsLoading(true);
-      const data = await getTransactions();
+      const data = await getTransactions(currentHousehold.id);
       setTransactions(data);
     } catch (error) {
       console.error("Error loading transactions:", error);
@@ -92,7 +107,7 @@ export default function Transactions() {
     isRecurring: tx.is_recurring,
   });
 
-  if (isLoading) {
+  if (householdLoading || isLoading || !currentHousehold) {
     return (
       <MobileLayout>
         <div className="flex items-center justify-center h-[60vh]">
@@ -207,6 +222,7 @@ export default function Transactions() {
         transaction={selectedTransaction}
         onClose={handleEditClose}
         onUpdate={loadTransactions}
+        householdId={currentHousehold.id}
       />
     </MobileLayout>
   );

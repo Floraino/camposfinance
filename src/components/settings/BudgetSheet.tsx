@@ -8,23 +8,24 @@ interface BudgetSheetProps {
   isOpen: boolean;
   onClose: () => void;
   onBudgetUpdated?: () => void;
+  householdId: string;
 }
 
-export function BudgetSheet({ isOpen, onClose, onBudgetUpdated }: BudgetSheetProps) {
+export function BudgetSheet({ isOpen, onClose, onBudgetUpdated, householdId }: BudgetSheetProps) {
   const [amount, setAmount] = useState("");
   const [currentBudget, setCurrentBudget] = useState<Budget | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && householdId) {
       loadCurrentBudget();
     }
-  }, [isOpen]);
+  }, [isOpen, householdId]);
 
   const loadCurrentBudget = async () => {
     try {
-      const budget = await getCurrentBudget("monthly");
+      const budget = await getCurrentBudget(householdId, "monthly");
       setCurrentBudget(budget);
       if (budget) {
         setAmount(budget.amount.toString().replace(".", ","));
@@ -49,7 +50,7 @@ export function BudgetSheet({ isOpen, onClose, onBudgetUpdated }: BudgetSheetPro
 
     setIsLoading(true);
     try {
-      await setBudget(numAmount, "monthly");
+      await setBudget(householdId, numAmount, "monthly");
       toast({
         title: "Orçamento salvo!",
         description: "Orçamento mensal definido com sucesso.",

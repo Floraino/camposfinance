@@ -12,6 +12,7 @@ import { BudgetSheet } from "@/components/settings/BudgetSheet";
 import { type CategoryType } from "@/components/ui/CategoryBadge";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
+import { useHousehold } from "@/hooks/useHousehold";
 import { getTransactions, addTransaction, getMonthlyStats, getMonthlyEvolution, type Transaction, type NewTransaction, type MonthlyExpense } from "@/services/transactionService";
 import { getCurrentBudget, type Budget } from "@/services/budgetService";
 import { useToast } from "@/hooks/use-toast";
@@ -21,6 +22,7 @@ import { supabase } from "@/integrations/supabase/client";
 export default function Dashboard() {
   const navigate = useNavigate();
   const { profile, isLoading: authLoading } = useAuth();
+  const { currentHousehold, hasSelectedHousehold, isLoading: householdLoading } = useHousehold();
   const { toast } = useToast();
   
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -46,18 +48,29 @@ export default function Dashboard() {
     byCategory: {} as Record<CategoryType, number>,
   });
 
+  // Redirect to household selection if no household selected
   useEffect(() => {
-    loadData();
-  }, [selectedMonth, selectedYear]);
+    if (!householdLoading && !hasSelectedHousehold) {
+      navigate("/select-household");
+    }
+  }, [householdLoading, hasSelectedHousehold, navigate]);
+
+  useEffect(() => {
+    if (currentHousehold?.id) {
+      loadData();
+    }
+  }, [selectedMonth, selectedYear, currentHousehold?.id]);
 
   const loadData = async () => {
+    if (!currentHousehold?.id) return;
+
     try {
       setIsLoading(true);
       const [txs, monthStats, evolution, currentBudget] = await Promise.all([
-        getTransactions(),
-        getMonthlyStats(selectedMonth, selectedYear),
-        getMonthlyEvolution(5),
-        getCurrentBudget("monthly"),
+        getTransactions(currentHousehold.id),
+        getMonthlyStats(currentHousehold.id, selectedMonth, selectedYear),
+        getMonthlyEvolution(currentHousehold.id, 5),
+        getCurrentBudget(currentHousehold.id, "monthly"),
       ]);
       setTransactions(txs);
       setStats(monthStats);
@@ -143,14 +156,16 @@ export default function Dashboard() {
   }, [transactions.length, isLoading]);
 
   const handleAddTransaction = async (newTx: NewTransaction) => {
+    if (!currentHousehold?.id) return;
+
     try {
-      const tx = await addTransaction(newTx);
+      const tx = await addTransaction(currentHousehold.id, newTx);
       setTransactions((prev) => [tx, ...prev]);
       
       // Refresh stats and monthly data
       const [monthStats, evolution] = await Promise.all([
-        getMonthlyStats(selectedMonth, selectedYear),
-        getMonthlyEvolution(5),
+        getMonthlyStats(currentHousehold.id, selectedMonth, selectedYear),
+        getMonthlyEvolution(currentHousehold.id, 5),
       ]);
       setStats(monthStats);
       setMonthlyData(evolution);
@@ -252,7 +267,7 @@ export default function Dashboard() {
     return "Boa noite";
   };
 
-  if (authLoading || isLoading) {
+  if (authLoading || householdLoading || isLoading || !currentHousehold) {
     return (
       <MobileLayout>
         <div className="flex items-center justify-center h-[60vh]">
@@ -270,8 +285,7 @@ export default function Dashboard() {
           <div>
             <p className="text-sm text-muted-foreground">{greeting()}! 👋</p>
             <h1 className="text-2xl font-bold text-foreground">
-              {profile?.display_name?.split(" ")[0] || "Casa"}
-              <span className="text-accent">Campos</span>
+              {currentHousehold.name}
             </h1>
           </div>
           <button className="w-10 h-10 rounded-full bg-muted flex items-center justify-center relative">
@@ -470,7 +484,9 @@ export default function Dashboard() {
                 <TransactionCard 
                   key={tx.id} 
                   transaction={tx} 
-                  onClick={() => handleTransactionClick(filteredTransactions.find(t => t.id === tx.id)!)}
+                  onClick={() => handleTransactionClick(
+                    transactions.find(t => t.id === tx.id)!
+                  )}
                 />
               ))}
             </div>
@@ -483,6 +499,7 @@ export default function Dashboard() {
         isOpen={showAddSheet}
         onClose={() => setShowAddSheet(false)}
         onAdd={handleAddTransaction}
+        householdId={currentHousehold.id}
       />
 
       {/* Receipt Scanner */}
@@ -490,6 +507,7 @@ export default function Dashboard() {
         isOpen={showScanner}
         onClose={() => setShowScanner(false)}
         onTransactionAdded={loadData}
+        householdId={currentHousehold.id}
       />
 
       {/* Budget Sheet */}
@@ -497,6 +515,7 @@ export default function Dashboard() {
         isOpen={showBudgetSheet}
         onClose={() => setShowBudgetSheet(false)}
         onBudgetUpdated={loadData}
+        householdId={currentHousehold.id}
       />
 
       {/* Edit Transaction Sheet */}
@@ -505,6 +524,7 @@ export default function Dashboard() {
         transaction={selectedTransaction}
         onClose={handleEditClose}
         onUpdate={loadData}
+        householdId={currentHousehold.id}
       />
     </MobileLayout>
   );

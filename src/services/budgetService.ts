@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 export interface Budget {
   id: string;
   user_id: string;
+  household_id: string;
   period_type: "weekly" | "monthly";
   amount: number;
   start_date: string;
@@ -11,26 +12,27 @@ export interface Budget {
   updated_at: string;
 }
 
-export async function getCurrentBudget(periodType: "weekly" | "monthly" = "monthly"): Promise<Budget | null> {
+export async function getCurrentBudget(householdId: string, periodType: "weekly" | "monthly" = "monthly"): Promise<Budget | null> {
+  if (!householdId) {
+    throw new Error("householdId é obrigatório para consultar orçamento");
+  }
+
   const now = new Date();
   let startDate: Date;
-  let endDate: Date;
 
   if (periodType === "monthly") {
     startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-    endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
   } else {
     // Weekly - start from Sunday
     const dayOfWeek = now.getDay();
     startDate = new Date(now);
     startDate.setDate(now.getDate() - dayOfWeek);
-    endDate = new Date(startDate);
-    endDate.setDate(startDate.getDate() + 6);
   }
 
   const { data, error } = await supabase
     .from("budgets")
     .select("*")
+    .eq("household_id", householdId)
     .eq("period_type", periodType)
     .eq("start_date", startDate.toISOString().split("T")[0])
     .maybeSingle();
@@ -43,7 +45,11 @@ export async function getCurrentBudget(periodType: "weekly" | "monthly" = "month
   } : null;
 }
 
-export async function setBudget(amount: number, periodType: "weekly" | "monthly" = "monthly"): Promise<Budget> {
+export async function setBudget(householdId: string, amount: number, periodType: "weekly" | "monthly" = "monthly"): Promise<Budget> {
+  if (!householdId) {
+    throw new Error("householdId é obrigatório para definir orçamento");
+  }
+
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Usuário não autenticado");
 
@@ -70,12 +76,13 @@ export async function setBudget(amount: number, periodType: "weekly" | "monthly"
     .from("budgets")
     .upsert({
       user_id: user.id,
+      household_id: householdId,
       period_type: periodType,
       amount,
       start_date: startDateStr,
       end_date: endDateStr,
     }, {
-      onConflict: "user_id,period_type,start_date",
+      onConflict: "household_id,period_type,start_date",
     })
     .select()
     .single();
@@ -88,11 +95,16 @@ export async function setBudget(amount: number, periodType: "weekly" | "monthly"
   };
 }
 
-export async function deleteBudget(id: string): Promise<void> {
+export async function deleteBudget(id: string, householdId: string): Promise<void> {
+  if (!householdId) {
+    throw new Error("householdId é obrigatório para deletar orçamento");
+  }
+
   const { error } = await supabase
     .from("budgets")
     .delete()
-    .eq("id", id);
+    .eq("id", id)
+    .eq("household_id", householdId);
 
   if (error) throw error;
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { X, Trash2, Loader2, User, Sparkles } from "lucide-react";
+import { X, Trash2, Loader2, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CategoryBadge, categoryConfig, type CategoryType } from "@/components/ui/CategoryBadge";
 import { cn } from "@/lib/utils";
@@ -22,6 +22,7 @@ interface EditTransactionSheetProps {
   transaction: Transaction | null;
   onClose: () => void;
   onUpdate: () => void;
+  householdId: string;
 }
 
 const paymentMethods = [
@@ -31,7 +32,7 @@ const paymentMethods = [
   { id: "cash", label: "Dinheiro" },
 ] as const;
 
-export function EditTransactionSheet({ isOpen, transaction, onClose, onUpdate }: EditTransactionSheetProps) {
+export function EditTransactionSheet({ isOpen, transaction, onClose, onUpdate, householdId }: EditTransactionSheetProps) {
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState<CategoryType>("other");
@@ -59,11 +60,12 @@ export function EditTransactionSheet({ isOpen, transaction, onClose, onUpdate }:
       setMemberId(transaction.member_id || undefined);
       loadFamilyMembers();
     }
-  }, [isOpen, transaction]);
+  }, [isOpen, transaction, householdId]);
 
   const loadFamilyMembers = async () => {
+    if (!householdId) return;
     try {
-      const members = await getFamilyMembers();
+      const members = await getFamilyMembers(householdId);
       setFamilyMembers(members);
     } catch (error) {
       console.error("Error loading family members:", error);
@@ -71,11 +73,11 @@ export function EditTransactionSheet({ isOpen, transaction, onClose, onUpdate }:
   };
 
   const handleSubmit = async () => {
-    if (!description || !amount || !transaction) return;
+    if (!description || !amount || !transaction || !householdId) return;
 
     setIsSaving(true);
     try {
-      await updateTransaction(transaction.id, {
+      await updateTransaction(transaction.id, householdId, {
         description,
         amount: -Math.abs(parseFloat(amount.replace(",", "."))),
         category,
@@ -106,11 +108,11 @@ export function EditTransactionSheet({ isOpen, transaction, onClose, onUpdate }:
   };
 
   const handleDelete = async () => {
-    if (!transaction) return;
+    if (!transaction || !householdId) return;
 
     setIsDeleting(true);
     try {
-      await deleteTransaction(transaction.id);
+      await deleteTransaction(transaction.id, householdId);
       
       toast({
         title: "Gasto excluído!",

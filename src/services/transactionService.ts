@@ -4,6 +4,7 @@ import type { CategoryType } from "@/components/ui/CategoryBadge";
 export interface Transaction {
   id: string;
   user_id: string;
+  household_id: string;
   description: string;
   amount: number;
   category: CategoryType;
@@ -30,7 +31,12 @@ export interface NewTransaction {
   member_id?: string;
 }
 
-export async function getTransactions(): Promise<Transaction[]> {
+// CRITICAL: All queries MUST filter by householdId for data isolation
+export async function getTransactions(householdId: string): Promise<Transaction[]> {
+  if (!householdId) {
+    throw new Error("householdId é obrigatório para listar transações");
+  }
+
   const { data, error } = await supabase
     .from("transactions")
     .select(`
@@ -39,6 +45,7 @@ export async function getTransactions(): Promise<Transaction[]> {
         name
       )
     `)
+    .eq("household_id", householdId)
     .order("transaction_date", { ascending: false });
 
   if (error) throw error;
@@ -52,7 +59,11 @@ export async function getTransactions(): Promise<Transaction[]> {
   }));
 }
 
-export async function addTransaction(transaction: NewTransaction): Promise<Transaction> {
+export async function addTransaction(householdId: string, transaction: NewTransaction): Promise<Transaction> {
+  if (!householdId) {
+    throw new Error("householdId é obrigatório para criar transação");
+  }
+
   const { data: { user } } = await supabase.auth.getUser();
   
   if (!user) throw new Error("Usuário não autenticado");
@@ -61,6 +72,7 @@ export async function addTransaction(transaction: NewTransaction): Promise<Trans
     .from("transactions")
     .insert({
       user_id: user.id,
+      household_id: householdId,
       description: transaction.description,
       amount: transaction.amount,
       category: transaction.category,
@@ -90,11 +102,16 @@ export async function addTransaction(transaction: NewTransaction): Promise<Trans
   };
 }
 
-export async function updateTransaction(id: string, updates: Partial<NewTransaction>): Promise<Transaction> {
+export async function updateTransaction(id: string, householdId: string, updates: Partial<NewTransaction>): Promise<Transaction> {
+  if (!householdId) {
+    throw new Error("householdId é obrigatório para atualizar transação");
+  }
+
   const { data, error } = await supabase
     .from("transactions")
     .update(updates)
     .eq("id", id)
+    .eq("household_id", householdId) // Double-check ownership
     .select()
     .single();
 
@@ -108,16 +125,25 @@ export async function updateTransaction(id: string, updates: Partial<NewTransact
   };
 }
 
-export async function deleteTransaction(id: string): Promise<void> {
+export async function deleteTransaction(id: string, householdId: string): Promise<void> {
+  if (!householdId) {
+    throw new Error("householdId é obrigatório para deletar transação");
+  }
+
   const { error } = await supabase
     .from("transactions")
     .delete()
-    .eq("id", id);
+    .eq("id", id)
+    .eq("household_id", householdId); // Double-check ownership
 
   if (error) throw error;
 }
 
-export async function getMonthlyStats(month?: number, year?: number) {
+export async function getMonthlyStats(householdId: string, month?: number, year?: number) {
+  if (!householdId) {
+    throw new Error("householdId é obrigatório para estatísticas");
+  }
+
   const now = new Date();
   const targetMonth = month ?? now.getMonth();
   const targetYear = year ?? now.getFullYear();
@@ -128,6 +154,7 @@ export async function getMonthlyStats(month?: number, year?: number) {
   const { data, error } = await supabase
     .from("transactions")
     .select("*")
+    .eq("household_id", householdId)
     .gte("transaction_date", startDate)
     .lte("transaction_date", endDate);
 
@@ -166,7 +193,11 @@ export interface MonthlyExpense {
   expenses: number;
 }
 
-export async function getMonthlyEvolution(months: number = 5): Promise<MonthlyExpense[]> {
+export async function getMonthlyEvolution(householdId: string, months: number = 5): Promise<MonthlyExpense[]> {
+  if (!householdId) {
+    throw new Error("householdId é obrigatório para evolução mensal");
+  }
+
   const now = new Date();
   const result: MonthlyExpense[] = [];
   
@@ -177,6 +208,7 @@ export async function getMonthlyEvolution(months: number = 5): Promise<MonthlyEx
   const { data, error } = await supabase
     .from("transactions")
     .select("amount, transaction_date")
+    .eq("household_id", householdId)
     .gte("transaction_date", startDate.toISOString().split("T")[0])
     .lte("transaction_date", endDate.toISOString().split("T")[0]);
 

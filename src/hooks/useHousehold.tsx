@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "./useAuth";
 import {
   getUserHouseholds,
@@ -55,6 +56,7 @@ const STORAGE_KEY = "currentHouseholdId";
 
 export function HouseholdProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   
   const [households, setHouseholds] = useState<Household[]>([]);
   const [currentHousehold, setCurrentHouseholdState] = useState<Household | null>(null);
@@ -170,9 +172,11 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
     return household;
   };
 
-  const switchHousehold = (household: Household) => {
+  const switchHousehold = useCallback((household: Household) => {
+    // Clear all query cache to prevent data leakage between households
+    queryClient.clear();
     setCurrentHousehold(household);
-  };
+  }, [queryClient, setCurrentHousehold]);
 
   return (
     <HouseholdContext.Provider
