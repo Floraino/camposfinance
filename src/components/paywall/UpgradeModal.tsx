@@ -1,4 +1,4 @@
-import { X, Crown, ScanLine, Wallet, Brain, FileText, Check } from "lucide-react";
+import { X, Crown, ScanLine, Wallet, Brain, FileText, Check, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useHousehold } from "@/hooks/useHousehold";
 import { PRO_PRICING, PLAN_COMPARISON } from "@/services/planService";
@@ -6,8 +6,9 @@ import { PRO_PRICING, PLAN_COMPARISON } from "@/services/planService";
 interface UpgradeModalProps {
   isOpen: boolean;
   onClose: () => void;
-  feature?: "ocr" | "accounts" | "ai" | "export";
+  feature?: "ocr" | "accounts" | "ai" | "export" | "csv";
   onUpgrade?: () => void;
+  onContinueManually?: () => void;
 }
 
 const featureMessages = {
@@ -15,25 +16,35 @@ const featureMessages = {
     icon: ScanLine,
     title: "OCR Automático",
     description: "Leitura automática de cupons fiscais, notas e comprovantes com extração inteligente de dados.",
+    showManualOption: true,
   },
   accounts: {
     icon: Wallet,
     title: "Contas Ilimitadas",
     description: "Famílias no plano Basic podem ter até 2 contas. Atualize para criar quantas precisar.",
+    showManualOption: false,
   },
   ai: {
     icon: Brain,
     title: "IA Financeira Completa",
     description: "Análises avançadas, sugestões personalizadas e alertas inteligentes para sua família.",
+    showManualOption: false,
   },
   export: {
     icon: FileText,
     title: "Exportação de Relatórios",
     description: "Exporte seus dados em PDF e Excel para análise detalhada.",
+    showManualOption: false,
+  },
+  csv: {
+    icon: Upload,
+    title: "Importação CSV",
+    description: "Importe transações de planilhas e extratos bancários automaticamente.",
+    showManualOption: false,
   },
 };
 
-export function UpgradeModal({ isOpen, onClose, feature = "ocr", onUpgrade }: UpgradeModalProps) {
+export function UpgradeModal({ isOpen, onClose, feature = "ocr", onUpgrade, onContinueManually }: UpgradeModalProps) {
   const { isAdmin, currentHousehold } = useHousehold();
   const featureInfo = featureMessages[feature];
   const Icon = featureInfo.icon;
@@ -154,21 +165,47 @@ export function UpgradeModal({ isOpen, onClose, feature = "ocr", onUpgrade }: Up
 
           {/* CTA */}
           {isAdmin ? (
-            <Button 
-              className="w-full h-12 bg-gradient-to-r from-amber-500 to-orange-500 text-white font-semibold"
-              onClick={handleUpgrade}
-            >
-              <Crown className="w-5 h-5 mr-2" />
-              Ativar Pro para a Família
-            </Button>
+            <div className="space-y-3">
+              <Button 
+                className="w-full h-12 bg-gradient-to-r from-amber-500 to-orange-500 text-white font-semibold"
+                onClick={handleUpgrade}
+              >
+                <Crown className="w-5 h-5 mr-2" />
+                Ativar Pro para a Família
+              </Button>
+              {featureInfo.showManualOption && onContinueManually && (
+                <Button 
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => {
+                    onContinueManually();
+                    onClose();
+                  }}
+                >
+                  Continuar manualmente
+                </Button>
+              )}
+            </div>
           ) : (
-            <div className="text-center">
-              <p className="text-sm text-muted-foreground mb-2">
+            <div className="text-center space-y-3">
+              <p className="text-sm text-muted-foreground">
                 Apenas o administrador da família pode gerenciar o plano.
               </p>
               <p className="text-xs text-muted-foreground">
                 Peça ao dono da casa "{currentHousehold?.name}" para fazer o upgrade.
               </p>
+              {featureInfo.showManualOption && onContinueManually && (
+                <Button 
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => {
+                    onContinueManually();
+                    onClose();
+                  }}
+                >
+                  Continuar manualmente
+                </Button>
+              )}
             </div>
           )}
 

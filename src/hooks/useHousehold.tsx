@@ -48,6 +48,7 @@ interface HouseholdContextType {
   canCreateAccount: boolean;
   canUseAIAssistant: boolean;
   canExportReports: boolean;
+  canImportCSV: boolean;
 }
 
 const HouseholdContext = createContext<HouseholdContextType | undefined>(undefined);
@@ -76,6 +77,7 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
   const canCreateAccount = true; // Will be checked at creation time via backend
   const canUseAIAssistant = planType === "PRO";
   const canExportReports = planType === "PRO";
+  const canImportCSV = planType === "PRO";
 
   const setCurrentHousehold = useCallback((household: Household | null) => {
     setCurrentHouseholdState(household);
@@ -200,6 +202,7 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
         canCreateAccount,
         canUseAIAssistant,
         canExportReports,
+        canImportCSV,
       }}
     >
       {children}

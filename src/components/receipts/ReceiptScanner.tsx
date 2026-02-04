@@ -12,10 +12,11 @@ interface ReceiptScannerProps {
   isOpen: boolean;
   onClose: () => void;
   onTransactionAdded?: () => void;
+  onContinueManually?: () => void;
   householdId: string;
 }
 
-export function ReceiptScanner({ isOpen, onClose, onTransactionAdded, householdId }: ReceiptScannerProps) {
+export function ReceiptScanner({ isOpen, onClose, onTransactionAdded, onContinueManually, householdId }: ReceiptScannerProps) {
   const [isScanning, setIsScanning] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [extractedData, setExtractedData] = useState<ExtractedReceipt | null>(null);
@@ -268,6 +269,11 @@ export function ReceiptScanner({ isOpen, onClose, onTransactionAdded, householdI
         isOpen={showUpgradeModal}
         onClose={() => setShowUpgradeModal(false)}
         feature="ocr"
+        onContinueManually={onContinueManually ? () => {
+          setShowUpgradeModal(false);
+          onClose();
+          onContinueManually();
+        } : undefined}
       />
     </>
   );
