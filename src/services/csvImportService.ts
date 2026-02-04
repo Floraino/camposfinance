@@ -557,3 +557,301 @@ export async function importTransactions(
 
   return data as ImportResult;
 }
+
+/**
+ * CSV Template - Standard format for the app
+ */
+export const CSV_TEMPLATE_HEADER = "data,descricao,tipo,valor,categoria,forma_pagamento,conta";
+
+export const CSV_TEMPLATE_EXAMPLES = [
+  "2026-01-15,Salário mensal,INCOME,5000.00,other,pix,Conta Corrente",
+  "2026-01-16,Supermercado Pão de Açúcar,EXPENSE,350.50,food,card,Conta Corrente",
+  "2026-01-17,Uber - corrida trabalho,EXPENSE,25.90,transport,pix,Conta Corrente",
+];
+
+/**
+ * Generate the standard CSV template for download
+ */
+export function generateCSVTemplate(): string {
+  const instructions = [
+    "# MODELO CSV PADRÃO - CasaClara",
+    "# Este é o formato ideal para importação de transações",
+    "#",
+    "# CAMPOS:",
+    "#   data: formato YYYY-MM-DD (ex: 2026-01-15) ou DD/MM/YYYY",
+    "#   descricao: texto descritivo da transação",
+    "#   tipo: INCOME (receita) ou EXPENSE (despesa)",
+    "#   valor: número positivo (ex: 150.50 ou 1500.00)",
+    "#   categoria: food, transport, bills, leisure, health, education, shopping, other",
+    "#   forma_pagamento: pix, card, boleto, cash",
+    "#   conta: nome da conta (opcional)",
+    "#",
+    "# REMOVA estas linhas de comentário antes de importar",
+    "#",
+  ];
+  
+  return [
+    ...instructions,
+    CSV_TEMPLATE_HEADER,
+    ...CSV_TEMPLATE_EXAMPLES,
+  ].join("\n");
+}
+
+/**
+ * Download the CSV template
+ */
+export function downloadCSVTemplate(): void {
+  const content = generateCSVTemplate();
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "modelo_importacao_casaclara.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Check if a CSV matches the standard template format
+ */
+export function isStandardFormat(csvContent: string): boolean {
+  const lines = csvContent.split(/\r?\n/).filter(l => l.trim() && !l.startsWith("#"));
+  if (lines.length === 0) return false;
+  
+  const header = lines[0].toLowerCase().replace(/\s/g, "");
+  const expectedHeader = CSV_TEMPLATE_HEADER.toLowerCase().replace(/\s/g, "");
+  
+  // Check if header matches our standard format
+  return header === expectedHeader || 
+         header.includes("data,descricao,tipo,valor") ||
+         header.includes("data,descrição,tipo,valor");
+}
+
+/**
+ * Parse a standard format CSV directly (skip AI analysis)
+ */
+export function parseStandardCSV(csvContent: string): ParsedRow[] {
+  const lines = csvContent.split(/\r?\n/).filter(l => l.trim() && !l.startsWith("#"));
+  if (lines.length < 2) return [];
+  
+  const results: ParsedRow[] = [];
+  
+  // Skip header
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    const cells = line.split(",").map(c => c.trim().replace(/^["']|["']$/g, ""));
+    
+    if (cells.length < 4) {
+      results.push({
+        rowIndex: i + 1,
+        raw: line,
+        status: "SKIPPED",
+        parsed: null,
+        errors: [],
+        reason: "Linha com poucos campos",
+      });
+      continue;
+    }
+    
+    const [dateStr, description, typeStr, valorStr, categoryStr, paymentStr] = cells;
+    
+    // Parse date
+    const transaction_date = parseDate(dateStr);
+    if (!transaction_date) {
+      results.push({
+        rowIndex: i + 1,
+        raw: line,
+        status: "ERROR",
+        parsed: null,
+        errors: [`Data inválida: "${dateStr}"`],
+        reason: `Data inválida: "${dateStr}"`,
+      });
+      continue;
+    }
+    
+    // Parse type
+    const transactionType = typeStr?.toUpperCase() === "INCOME" ? "INCOME" : "EXPENSE";
+    
+    // Parse amount
+    const amount = parseLocalizedNumber(valorStr);
+    if (amount === null || amount === 0) {
+      results.push({
+        rowIndex: i + 1,
+        raw: line,
+        status: "ERROR",
+        parsed: null,
+        errors: [`Valor inválido: "${valorStr}"`],
+        reason: `Valor inválido: "${valorStr}"`,
+      });
+      continue;
+    }
+    
+    // Category mapping
+    const category: CategoryType = categoryMapping[categoryStr?.toLowerCase() || ""] || 
+                                   inferCategory(description) || 
+                                   "other";
+    
+    // Payment method
+    const payment_method = paymentMapping[paymentStr?.toLowerCase() || ""] || 
+                          inferPaymentMethod(description) || 
+                          "pix";
+    
+    const finalAmount = transactionType === "EXPENSE" ? -Math.abs(amount) : Math.abs(amount);
+    
+    results.push({
+      rowIndex: i + 1,
+      raw: line,
+      status: "OK",
+      parsed: {
+        description: description.substring(0, 255) || "Transação importada",
+        amount: finalAmount,
+        type: transactionType,
+        category,
+        payment_method,
+        status: "paid",
+        transaction_date,
+        import_hash: generateImportHash(transaction_date, finalAmount, description),
+      },
+      errors: [],
+    });
+  }
+  
+  return results;
+}
+
+export interface ConvertedTransaction {
+  data: string;
+  descricao: string;
+  tipo: "INCOME" | "EXPENSE";
+  valor: number;
+  categoria: string;
+  forma_pagamento: string;
+  conta?: string;
+  status: "OK" | "SKIPPED" | "ERROR";
+  reason?: string;
+  originalRow: string;
+}
+
+export interface ConversionResult {
+  converted: ConvertedTransaction[];
+  summary: {
+    total: number;
+    ok: number;
+    skipped: number;
+    errors: number;
+    totalIncome: number;
+    totalExpense: number;
+  };
+}
+
+/**
+ * Convert a bank statement CSV to the app's standard format using the existing parsing logic
+ */
+export async function convertBankStatement(csvContent: string): Promise<ConversionResult> {
+  // First analyze with AI
+  const analysis = await analyzeCSV(csvContent);
+  
+  // Then parse with detected mappings
+  const parsedRows = parseCSVWithMappings(
+    csvContent,
+    analysis.columnMappings,
+    analysis.separator,
+    analysis.hasHeader,
+    analysis.dateFormat,
+    analysis.hasEntradaSaida
+  );
+  
+  // Convert to standard format
+  const converted: ConvertedTransaction[] = parsedRows.map(row => {
+    if (row.status === "OK" && row.parsed) {
+      const parsed = row.parsed;
+      return {
+        data: parsed.transaction_date,
+        descricao: parsed.description,
+        tipo: parsed.type,
+        valor: Math.abs(parsed.amount),
+        categoria: parsed.category,
+        forma_pagamento: parsed.payment_method,
+        status: "OK" as const,
+        originalRow: row.raw,
+      };
+    } else if (row.status === "SKIPPED") {
+      return {
+        data: "",
+        descricao: "",
+        tipo: "EXPENSE" as const,
+        valor: 0,
+        categoria: "other",
+        forma_pagamento: "pix",
+        status: "SKIPPED" as const,
+        reason: row.reason,
+        originalRow: row.raw,
+      };
+    } else {
+      return {
+        data: "",
+        descricao: "",
+        tipo: "EXPENSE" as const,
+        valor: 0,
+        categoria: "other",
+        forma_pagamento: "pix",
+        status: "ERROR" as const,
+        reason: row.reason || row.errors[0],
+        originalRow: row.raw,
+      };
+    }
+  });
+  
+  const ok = converted.filter(c => c.status === "OK");
+  const totalIncome = ok.filter(c => c.tipo === "INCOME").reduce((sum, c) => sum + c.valor, 0);
+  const totalExpense = ok.filter(c => c.tipo === "EXPENSE").reduce((sum, c) => sum + c.valor, 0);
+  
+  return {
+    converted,
+    summary: {
+      total: converted.length,
+      ok: ok.length,
+      skipped: converted.filter(c => c.status === "SKIPPED").length,
+      errors: converted.filter(c => c.status === "ERROR").length,
+      totalIncome,
+      totalExpense,
+    },
+  };
+}
+
+/**
+ * Generate a CSV string in standard format from converted transactions
+ */
+export function generateStandardCSV(transactions: ConvertedTransaction[]): string {
+  const okTransactions = transactions.filter(t => t.status === "OK");
+  
+  const lines = [
+    CSV_TEMPLATE_HEADER,
+    ...okTransactions.map(t => 
+      `${t.data},${escapeCsvField(t.descricao)},${t.tipo},${t.valor.toFixed(2)},${t.categoria},${t.forma_pagamento},${t.conta || ""}`
+    ),
+  ];
+  
+  return lines.join("\n");
+}
+
+function escapeCsvField(field: string): string {
+  if (field.includes(",") || field.includes('"') || field.includes("\n")) {
+    return `"${field.replace(/"/g, '""')}"`;
+  }
+  return field;
+}
+
+/**
+ * Download converted CSV in standard format
+ */
+export function downloadConvertedCSV(transactions: ConvertedTransaction[]): void {
+  const content = generateStandardCSV(transactions);
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "extrato_convertido.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
