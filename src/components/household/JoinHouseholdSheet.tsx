@@ -57,10 +57,28 @@ export function JoinHouseholdSheet({ open, onClose }: JoinHouseholdSheetProps) {
 
       if (rpcError) throw rpcError;
 
-      const result = data as { success: boolean; error?: string; household_id?: string; household_name?: string };
+      const result = data as { 
+        success: boolean; 
+        error?: string; 
+        pending?: boolean;
+        household_id?: string; 
+        household_name?: string;
+        message?: string;
+      };
 
       if (!result.success) {
         setError(result.error || "Erro ao entrar na família");
+        return;
+      }
+
+      // Check if request is pending approval
+      if (result.pending) {
+        toast({
+          title: "Solicitação enviada!",
+          description: `Aguarde a aprovação do administrador de "${result.household_name}"`,
+        });
+        onClose();
+        setCode("");
         return;
       }
 

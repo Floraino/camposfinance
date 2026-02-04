@@ -204,6 +204,57 @@ export type Database = {
           },
         ]
       }
+      household_join_requests: {
+        Row: {
+          created_at: string
+          household_id: string
+          id: string
+          invite_id: string | null
+          requested_at: string
+          responded_at: string | null
+          responded_by: string | null
+          status: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          household_id: string
+          id?: string
+          invite_id?: string | null
+          requested_at?: string
+          responded_at?: string | null
+          responded_by?: string | null
+          status?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          household_id?: string
+          id?: string
+          invite_id?: string | null
+          requested_at?: string
+          responded_at?: string | null
+          responded_by?: string | null
+          status?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "household_join_requests_household_id_fkey"
+            columns: ["household_id"]
+            isOneToOne: false
+            referencedRelation: "households"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "household_join_requests_invite_id_fkey"
+            columns: ["invite_id"]
+            isOneToOne: false
+            referencedRelation: "household_invites"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       household_members: {
         Row: {
           created_at: string
@@ -474,6 +525,10 @@ export type Database = {
         Returns: boolean
       }
       join_household_by_code: { Args: { _code: string }; Returns: Json }
+      respond_to_join_request: {
+        Args: { _approve: boolean; _request_id: string }
+        Returns: Json
+      }
     }
     Enums: {
       household_role: "owner" | "admin" | "member"
