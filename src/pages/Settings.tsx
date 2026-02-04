@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { ChevronRight, Moon, Bell, Shield, Users, Download, Upload, HelpCircle, LogOut, User, Camera, X, Loader2, Crown, Home, Wallet } from "lucide-react";
+import { ChevronRight, Moon, Bell, Shield, Users, Download, Upload, HelpCircle, LogOut, User, Camera, X, Loader2, Crown, Home, Wallet, RefreshCw } from "lucide-react";
 import { MobileLayout } from "@/components/layout/MobileLayout";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ import { SecuritySheet } from "@/components/settings/SecuritySheet";
 import { ImportCSVSheet } from "@/components/transactions/ImportCSVSheet";
 import { PlanBadge } from "@/components/paywall/PlanBadge";
 import { UpgradeModal } from "@/components/paywall/UpgradeModal";
+import { HouseholdSwitcher } from "@/components/household/HouseholdSwitcher";
 
 export default function Settings() {
   const { profile, user, signOut } = useAuth();
@@ -327,21 +328,29 @@ export default function Settings() {
               Família
             </h3>
             
-            {/* Household Card */}
-            <div className="glass-card p-4 mb-3">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-xl bg-primary/20 flex items-center justify-center">
-                  <Home className="w-6 h-6 text-primary" />
+            {/* Household Card with Switcher */}
+            <HouseholdSwitcher>
+              <div className="glass-card p-4 mb-3 cursor-pointer hover:bg-card/80 transition-colors">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-xl bg-primary/20 flex items-center justify-center">
+                    <Home className="w-6 h-6 text-primary" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-foreground">{currentHousehold?.name || "Minha Casa"}</p>
+                    <p className="text-sm text-muted-foreground">
+                      Plano: <span className={planType === "PRO" ? "text-amber-500" : ""}>{planType}</span>
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <PlanBadge size="sm" showLabel={false} />
+                    <RefreshCw className="w-4 h-4 text-muted-foreground" />
+                  </div>
                 </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium text-foreground">{currentHousehold?.name || "Minha Casa"}</p>
-                  <p className="text-sm text-muted-foreground">
-                    Plano da Família: <span className={planType === "PRO" ? "text-amber-500" : ""}>{planType}</span>
-                  </p>
-                </div>
-                <PlanBadge size="lg" />
+                <p className="text-xs text-muted-foreground mt-2 text-center">
+                  Toque para trocar de família
+                </p>
               </div>
-            </div>
+            </HouseholdSwitcher>
 
             <div className="glass-card divide-y divide-border overflow-hidden">
               <button 

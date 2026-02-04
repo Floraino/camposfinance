@@ -33,10 +33,14 @@ interface HouseholdContextType {
   // Loading states
   isLoading: boolean;
   
+  // Whether a household has been selected
+  hasSelectedHousehold: boolean;
+  
   // Actions
   refreshHouseholds: () => Promise<void>;
   createNewHousehold: (name: string) => Promise<Household>;
   switchHousehold: (household: Household) => void;
+  clearHousehold: () => void;
   
   // Feature checks
   canUseOCR: boolean;
@@ -57,6 +61,7 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
   const [plan, setPlan] = useState<HouseholdPlan | null>(null);
   const [userRole, setUserRole] = useState<HouseholdRole | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [hasSelectedHousehold, setHasSelectedHousehold] = useState(false);
 
   // Derived state
   const planType: PlanType = plan?.plan || "BASIC";
@@ -64,9 +69,9 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
   const isAdmin = userRole === "owner" || userRole === "admin";
   const isOwner = userRole === "owner";
 
-  // Feature flags
+  // Feature flags based on plan
   const canUseOCR = planType === "PRO";
-  const canCreateAccount = true; // Will be checked at creation time
+  const canCreateAccount = true; // Will be checked at creation time via backend
   const canUseAIAssistant = planType === "PRO";
   const canExportReports = planType === "PRO";
 
@@ -74,9 +79,19 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
     setCurrentHouseholdState(household);
     if (household) {
       localStorage.setItem(STORAGE_KEY, household.id);
+      setHasSelectedHousehold(true);
     } else {
       localStorage.removeItem(STORAGE_KEY);
+      setHasSelectedHousehold(false);
     }
+  }, []);
+
+  const clearHousehold = useCallback(() => {
+    setCurrentHouseholdState(null);
+    localStorage.removeItem(STORAGE_KEY);
+    setHasSelectedHousehold(false);
+    setPlan(null);
+    setUserRole(null);
   }, []);
 
   const refreshHouseholds = useCallback(async () => {
@@ -86,26 +101,23 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
       const userHouseholds = await getUserHouseholds();
       setHouseholds(userHouseholds);
       
-      // If no households, create a default one
-      if (userHouseholds.length === 0) {
-        const defaultHousehold = await createHousehold("Minha Casa");
-        setHouseholds([defaultHousehold]);
-        setCurrentHousehold(defaultHousehold);
-      } else {
-        // Try to restore last selected household
-        const savedId = localStorage.getItem(STORAGE_KEY);
-        const savedHousehold = savedId ? userHouseholds.find(h => h.id === savedId) : null;
-        
+      // Check if there's a saved household that's still valid
+      const savedId = localStorage.getItem(STORAGE_KEY);
+      if (savedId) {
+        const savedHousehold = userHouseholds.find(h => h.id === savedId);
         if (savedHousehold) {
-          setCurrentHousehold(savedHousehold);
+          setCurrentHouseholdState(savedHousehold);
+          setHasSelectedHousehold(true);
         } else {
-          setCurrentHousehold(userHouseholds[0]);
+          // Saved household no longer exists, clear it
+          localStorage.removeItem(STORAGE_KEY);
+          setHasSelectedHousehold(false);
         }
       }
     } catch (error) {
       console.error("Error loading households:", error);
     }
-  }, [user, setCurrentHousehold]);
+  }, [user]);
 
   // Load plan and role when current household changes
   useEffect(() => {
@@ -147,6 +159,7 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
       setCurrentHouseholdState(null);
       setPlan(null);
       setUserRole(null);
+      setHasSelectedHousehold(false);
       setIsLoading(false);
     }
   }, [user, refreshHouseholds]);
@@ -174,9 +187,11 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
         isAdmin,
         isOwner,
         isLoading,
+        hasSelectedHousehold,
         refreshHouseholds,
         createNewHousehold,
         switchHousehold,
+        clearHousehold,
         canUseOCR,
         canCreateAccount,
         canUseAIAssistant,
