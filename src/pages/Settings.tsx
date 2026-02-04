@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import { useHousehold } from "@/hooks/useHousehold";
 import { useAdmin } from "@/hooks/useAdmin";
+import { useProFeature } from "@/hooks/useProFeature";
 import { useTheme } from "@/components/providers/ThemeProvider";
 import { useNavigate, Link } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
@@ -19,15 +20,20 @@ import { SecuritySheet } from "@/components/settings/SecuritySheet";
 import { ImportCSVSheet } from "@/components/transactions/ImportCSVSheet";
 import { PlanBadge } from "@/components/paywall/PlanBadge";
 import { UpgradeModal } from "@/components/paywall/UpgradeModal";
+import { ProBadge, ProIndicator } from "@/components/paywall/ProBadge";
 import { HouseholdSwitcher } from "@/components/household/HouseholdSwitcher";
 
 export default function Settings() {
   const { profile, user, signOut } = useAuth();
-  const { currentHousehold, planType, isAdmin, canExportReports, canUseOCR } = useHousehold();
+  const { currentHousehold, planType, isAdmin, canExportReports } = useHousehold();
   const { isSuperAdmin } = useAdmin();
   const { resolvedTheme, setTheme } = useTheme();
   const navigate = useNavigate();
   const { toast } = useToast();
+  
+  // Use centralized PRO feature checks
+  const csvFeature = useProFeature("CSV_IMPORT");
+  const exportFeature = useProFeature("DATA_EXPORT");
   
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [showFamilyMembers, setShowFamilyMembers] = useState(false);
@@ -38,10 +44,7 @@ export default function Settings() {
   const [showHelp, setShowHelp] = useState(false);
   const [showSecurity, setShowSecurity] = useState(false);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
-  const [upgradeFeature, setUpgradeFeature] = useState<"ocr" | "accounts" | "ai" | "export" | "csv">("ocr");
-  
-  // CSV import is a PRO feature
-  const canImportCSV = planType === "PRO";
+  const [upgradeFeature, setUpgradeFeature] = useState<"CSV_IMPORT" | "DATA_EXPORT">("CSV_IMPORT");
   
   const [displayName, setDisplayName] = useState(profile?.display_name || "");
   const [avatarPreview, setAvatarPreview] = useState<string | null>(profile?.avatar_url || null);
@@ -415,10 +418,10 @@ export default function Settings() {
             <div className="glass-card divide-y divide-border overflow-hidden">
               <button 
                 onClick={() => {
-                  if (canImportCSV) {
+                  if (csvFeature.allowed) {
                     setShowImportCSV(true);
                   } else {
-                    setUpgradeFeature("csv");
+                    setUpgradeFeature("CSV_IMPORT");
                     setShowUpgradeModal(true);
                   }
                 }}
@@ -426,31 +429,25 @@ export default function Settings() {
               >
                 <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center relative">
                   <Upload className="w-5 h-5 text-muted-foreground" />
-                  {!canImportCSV && (
-                    <div className="absolute -top-1 -right-1 w-5 h-5 bg-amber-500 rounded-full flex items-center justify-center">
-                      <Crown className="w-3 h-3 text-white" />
-                    </div>
-                  )}
+                  <ProBadge show={!csvFeature.allowed} size="sm" iconOnly className="absolute -top-1 -right-1" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <p className="font-medium text-foreground">Importar CSV</p>
-                    {!canImportCSV && (
-                      <span className="text-[10px] font-semibold text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded">PRO</span>
-                    )}
+                    <ProIndicator show={!csvFeature.allowed} />
                   </div>
                   <p className="text-sm text-muted-foreground truncate">
-                    {canImportCSV ? "Importar transações de planilha" : "Disponível no plano Pro"}
+                    {csvFeature.allowed ? "Importar transações de planilha" : "Disponível no plano Pro"}
                   </p>
                 </div>
                 <ChevronRight className="w-5 h-5 text-muted-foreground" />
               </button>
               <button 
                 onClick={() => {
-                  if (canExportReports) {
+                  if (exportFeature.allowed) {
                     setShowExportReport(true);
                   } else {
-                    setUpgradeFeature("export");
+                    setUpgradeFeature("DATA_EXPORT");
                     setShowUpgradeModal(true);
                   }
                 }}
@@ -458,21 +455,15 @@ export default function Settings() {
               >
                 <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center relative">
                   <Download className="w-5 h-5 text-muted-foreground" />
-                  {!canExportReports && (
-                    <div className="absolute -top-1 -right-1 w-5 h-5 bg-amber-500 rounded-full flex items-center justify-center">
-                      <Crown className="w-3 h-3 text-white" />
-                    </div>
-                  )}
+                  <ProBadge show={!exportFeature.allowed} size="sm" iconOnly className="absolute -top-1 -right-1" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <p className="font-medium text-foreground">Exportar Relatório</p>
-                    {!canExportReports && (
-                      <span className="text-[10px] font-semibold text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded">PRO</span>
-                    )}
+                    <ProIndicator show={!exportFeature.allowed} />
                   </div>
                   <p className="text-sm text-muted-foreground truncate">
-                    {canExportReports ? "PDF ou Excel" : "Disponível no plano Pro"}
+                    {exportFeature.allowed ? "PDF ou Excel" : "Disponível no plano Pro"}
                   </p>
                 </div>
                 <ChevronRight className="w-5 h-5 text-muted-foreground" />

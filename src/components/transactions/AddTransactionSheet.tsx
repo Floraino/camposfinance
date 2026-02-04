@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { X, Camera, Image as ImageIcon, ChevronRight, Loader2, User, Sparkles, Crown } from "lucide-react";
+import { X, Camera, Image as ImageIcon, ChevronRight, Loader2, User, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CategoryBadge, categoryConfig, type CategoryType } from "@/components/ui/CategoryBadge";
 import { cn } from "@/lib/utils";
@@ -8,9 +8,9 @@ import { getFamilyMembers, type FamilyMember } from "@/services/familyService";
 import { categorizeDescription } from "@/services/categorizationService";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { useHousehold } from "@/hooks/useHousehold";
+import { useProFeature } from "@/hooks/useProFeature";
 import { UpgradeModal } from "@/components/paywall/UpgradeModal";
-import { Badge } from "@/components/ui/badge";
+import { ProBadge } from "@/components/paywall/ProBadge";
 interface AddTransactionSheetProps {
   isOpen: boolean;
   onClose: () => void;
@@ -45,7 +45,7 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const categorizationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { toast } = useToast();
-  const { canUseOCR, isAdmin, planType } = useHousehold();
+  const { allowed: canUseOCR } = useProFeature("OCR_SCAN");
 
   useEffect(() => {
     if (isOpen && householdId) {
@@ -288,12 +288,7 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
                 <Camera className="w-5 h-5 text-primary" />
               )}
               <span className="text-sm">{isScanning ? "Analisando..." : "Escanear Cupom"}</span>
-              {!canUseOCR && (
-                <Badge className="absolute -top-2 -right-2 bg-accent text-accent-foreground text-[10px] px-1.5 py-0.5 flex items-center gap-0.5">
-                  <Crown className="w-3 h-3" />
-                  PRO
-                </Badge>
-              )}
+              <ProBadge show={!canUseOCR} className="absolute -top-2 -right-2" />
             </Button>
             <Button 
               variant="outline" 
@@ -307,12 +302,7 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
                 <ImageIcon className="w-5 h-5 text-primary" />
               )}
               <span className="text-sm">{isScanning ? "Analisando..." : "Enviar Imagem"}</span>
-              {!canUseOCR && (
-                <Badge className="absolute -top-2 -right-2 bg-accent text-accent-foreground text-[10px] px-1.5 py-0.5 flex items-center gap-0.5">
-                  <Crown className="w-3 h-3" />
-                  PRO
-                </Badge>
-              )}
+              <ProBadge show={!canUseOCR} className="absolute -top-2 -right-2" />
             </Button>
           </div>
 
