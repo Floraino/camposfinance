@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { X, Crown, Check, ChevronRight, Home, Users, Ticket } from "lucide-react";
+import { useState, useEffect } from "react";
+import { X, Crown, Check, ChevronRight, Home, Ticket, Loader2, CreditCard, ExternalLink, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useHousehold } from "@/hooks/useHousehold";
@@ -7,6 +7,8 @@ import { PLAN_COMPARISON, PRO_PRICING } from "@/services/planService";
 import { PlanBadge } from "@/components/paywall/PlanBadge";
 import { UpgradeModal } from "@/components/paywall/UpgradeModal";
 import { RedeemCouponSheet } from "./RedeemCouponSheet";
+import { createCheckout, checkSubscription, openCustomerPortal, type SubscriptionStatus, type PriceType } from "@/services/subscriptionService";
+import { useToast } from "@/hooks/use-toast";
 
 interface FamilyPlanSheetProps {
   isOpen: boolean;
@@ -14,12 +16,88 @@ interface FamilyPlanSheetProps {
 }
 
 export function FamilyPlanSheet({ isOpen, onClose }: FamilyPlanSheetProps) {
-  const { currentHousehold, planType, isAdmin, plan, households } = useHousehold();
+  const { currentHousehold, planType, isAdmin, plan, households, refreshHouseholds } = useHousehold();
+  const { toast } = useToast();
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [showRedeemCoupon, setShowRedeemCoupon] = useState(false);
+  const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus | null>(null);
+  const [isLoadingStatus, setIsLoadingStatus] = useState(false);
+  const [isLoadingPortal, setIsLoadingPortal] = useState(false);
+  const [isLoadingCheckout, setIsLoadingCheckout] = useState<PriceType | null>(null);
+  
   const isPro = planType === "PRO";
 
-  const formatDate = (dateString: string | null) => {
+  // Check subscription status on open
+  useEffect(() => {
+    if (isOpen && currentHousehold?.id) {
+      refreshSubscriptionStatus();
+    }
+  }, [isOpen, currentHousehold?.id]);
+
+  const refreshSubscriptionStatus = async () => {
+    if (!currentHousehold?.id) return;
+    
+    setIsLoadingStatus(true);
+    try {
+      const status = await checkSubscription(currentHousehold.id);
+      setSubscriptionStatus(status);
+      
+      // Refresh household data if plan changed
+      if (status.plan !== planType) {
+        await refreshHouseholds();
+      }
+    } catch (error) {
+      console.error("Error checking subscription:", error);
+    } finally {
+      setIsLoadingStatus(false);
+    }
+  };
+
+  const handleOpenPortal = async () => {
+    setIsLoadingPortal(true);
+    try {
+      const portalUrl = await openCustomerPortal();
+      window.open(portalUrl, "_blank");
+      toast({
+        title: "Portal aberto",
+        description: "Uma nova aba foi aberta para gerenciar sua assinatura",
+      });
+    } catch (error) {
+      console.error("Error opening portal:", error);
+      toast({
+        title: "Erro",
+        description: error instanceof Error ? error.message : "Erro ao abrir portal",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoadingPortal(false);
+    }
+  };
+
+  const handleSubscribe = async (priceType: PriceType) => {
+    if (!currentHousehold?.id) return;
+    
+    setIsLoadingCheckout(priceType);
+    try {
+      const checkoutUrl = await createCheckout(currentHousehold.id, priceType);
+      window.open(checkoutUrl, "_blank");
+      toast({
+        title: "Checkout aberto",
+        description: "Uma nova aba foi aberta para completar o pagamento",
+      });
+    } catch (error) {
+      console.error("Error creating checkout:", error);
+      toast({
+        title: "Erro",
+        description: error instanceof Error ? error.message : "Erro ao criar checkout",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoadingCheckout(null);
+    }
+  };
+
+  const formatDate = (dateString: string | null | undefined) => {
     if (!dateString) return "—";
     return new Date(dateString).toLocaleDateString("pt-BR", {
       day: "2-digit",
@@ -28,14 +106,36 @@ export function FamilyPlanSheet({ isOpen, onClose }: FamilyPlanSheetProps) {
     });
   };
 
+  const getStatusLabel = (status: string) => {
+    const labels: Record<string, { text: string; color: string }> = {
+      active: { text: "Ativo", color: "text-green-500" },
+      trialing: { text: "Período de teste", color: "text-blue-500" },
+      past_due: { text: "Pagamento atrasado", color: "text-amber-500" },
+      canceled: { text: "Cancelado", color: "text-red-500" },
+      cancelled: { text: "Cancelado", color: "text-red-500" },
+      expired: { text: "Expirado", color: "text-muted-foreground" },
+    };
+    return labels[status] || { text: status, color: "text-muted-foreground" };
+  };
+
   return (
     <>
       <Sheet open={isOpen} onOpenChange={(open) => !open && onClose()}>
         <SheetContent side="bottom" className="h-[85vh] rounded-t-3xl">
           <SheetHeader className="pb-4 border-b border-border">
-            <SheetTitle className="flex items-center gap-2">
-              <Crown className={isPro ? "w-5 h-5 text-amber-500" : "w-5 h-5 text-muted-foreground"} />
-              Plano da Família
+            <SheetTitle className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Crown className={isPro ? "w-5 h-5 text-amber-500" : "w-5 h-5 text-muted-foreground"} />
+                Plano da Família
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={refreshSubscriptionStatus}
+                disabled={isLoadingStatus}
+              >
+                <RefreshCw className={`w-4 h-4 ${isLoadingStatus ? "animate-spin" : ""}`} />
+              </Button>
             </SheetTitle>
           </SheetHeader>
 
@@ -56,22 +156,33 @@ export function FamilyPlanSheet({ isOpen, onClose }: FamilyPlanSheetProps) {
                   <PlanBadge size="lg" />
                 </div>
 
-                {plan && (
+                {(plan || subscriptionStatus) && (
                   <div className="pt-3 border-t border-border space-y-2">
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground">Status</span>
-                      <span className={plan.status === "active" ? "text-green-500" : "text-muted-foreground"}>
-                        {plan.status === "active" ? "Ativo" : plan.status}
+                      <span className={getStatusLabel(subscriptionStatus?.status || plan?.status || "").color}>
+                        {getStatusLabel(subscriptionStatus?.status || plan?.status || "").text}
                       </span>
                     </div>
+                    {subscriptionStatus?.provider && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Provedor</span>
+                        <span className="text-foreground flex items-center gap-1">
+                          <CreditCard className="w-3 h-3" />
+                          {subscriptionStatus.provider === "subscription" ? "Stripe" : subscriptionStatus.provider}
+                        </span>
+                      </div>
+                    )}
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground">Desde</span>
-                      <span className="text-foreground">{formatDate(plan.started_at)}</span>
+                      <span className="text-foreground">{formatDate(plan?.started_at)}</span>
                     </div>
-                    {plan.expires_at && (
+                    {(subscriptionStatus?.pro_expires_at || plan?.pro_expires_at) && isPro && (
                       <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">Expira em</span>
-                        <span className="text-foreground">{formatDate(plan.expires_at)}</span>
+                        <span className="text-muted-foreground">Renova em</span>
+                        <span className="text-foreground">
+                          {formatDate(subscriptionStatus?.pro_expires_at || plan?.pro_expires_at)}
+                        </span>
                       </div>
                     )}
                   </div>
@@ -126,55 +237,89 @@ export function FamilyPlanSheet({ isOpen, onClose }: FamilyPlanSheetProps) {
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between mb-4">
-                    <div>
-                      <p className="text-xs text-muted-foreground">A partir de</p>
-                      <p className="text-lg font-bold text-foreground">
-                        R$ {PRO_PRICING.monthly.amount.toFixed(2).replace(".", ",")}/mês
-                      </p>
-                    </div>
-                    {!isAdmin && (
-                      <span className="text-xs text-muted-foreground">
-                        Apenas admins
-                      </span>
-                    )}
-                  </div>
+                  {isAdmin ? (
+                    <div className="space-y-3">
+                      {/* Annual Plan */}
+                      <Button
+                        className="w-full h-14 bg-gradient-to-r from-amber-500 to-orange-500 text-white"
+                        onClick={() => handleSubscribe("yearly")}
+                        disabled={isLoadingCheckout !== null}
+                      >
+                        {isLoadingCheckout === "yearly" ? (
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                        ) : (
+                          <div className="flex items-center justify-between w-full">
+                            <div className="flex items-center gap-2">
+                              <Crown className="w-5 h-5" />
+                              <span>Anual</span>
+                              <span className="text-xs bg-white/20 px-2 py-0.5 rounded">
+                                {PRO_PRICING.yearly.savings}
+                              </span>
+                            </div>
+                            <span className="font-bold">
+                              R$ {PRO_PRICING.yearly.amount.toFixed(2).replace(".", ",")}/ano
+                            </span>
+                          </div>
+                        )}
+                      </Button>
 
-                  <Button
-                    className="w-full bg-gradient-to-r from-amber-500 to-orange-500 text-white"
-                    disabled={!isAdmin}
-                    onClick={() => setShowUpgradeModal(true)}
-                  >
-                    {isAdmin ? "Ver planos" : "Fale com o administrador"}
-                    <ChevronRight className="w-4 h-4 ml-1" />
-                  </Button>
+                      {/* Monthly Plan */}
+                      <Button
+                        variant="outline"
+                        className="w-full h-12"
+                        onClick={() => handleSubscribe("monthly")}
+                        disabled={isLoadingCheckout !== null}
+                      >
+                        {isLoadingCheckout === "monthly" ? (
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                        ) : (
+                          <div className="flex items-center justify-between w-full">
+                            <span>Mensal</span>
+                            <span className="font-bold">
+                              R$ {PRO_PRICING.monthly.amount.toFixed(2).replace(".", ",")}/mês
+                            </span>
+                          </div>
+                        )}
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="text-center">
+                      <span className="text-sm text-muted-foreground">
+                        Apenas admins podem assinar
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
 
               {/* Manage subscription for PRO users */}
-              {isPro && isAdmin && (
+              {isPro && isAdmin && subscriptionStatus?.subscription_id && (
                 <div>
                   <h4 className="text-sm font-medium text-muted-foreground mb-3 px-1">
                     Gerenciar assinatura
                   </h4>
                   <div className="glass-card overflow-hidden">
-                    <button className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors">
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-foreground">Alterar forma de pagamento</p>
-                        <p className="text-sm text-muted-foreground truncate">
-                          Cartão ou PIX
-                        </p>
-                      </div>
-                      <ChevronRight className="w-5 h-5 text-muted-foreground" />
-                    </button>
-                    <button className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors border-t border-border">
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-destructive">Cancelar assinatura</p>
-                        <p className="text-sm text-muted-foreground truncate">
-                          Você voltará ao plano Basic
-                        </p>
-                      </div>
-                      <ChevronRight className="w-5 h-5 text-muted-foreground" />
+                    <button 
+                      className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors disabled:opacity-50"
+                      onClick={handleOpenPortal}
+                      disabled={isLoadingPortal}
+                    >
+                      {isLoadingPortal ? (
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                      ) : (
+                        <>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium text-foreground flex items-center gap-2">
+                              Gerenciar no Stripe
+                              <ExternalLink className="w-3 h-3" />
+                            </p>
+                            <p className="text-sm text-muted-foreground truncate">
+                              Alterar pagamento, cancelar ou trocar plano
+                            </p>
+                          </div>
+                          <ChevronRight className="w-5 h-5 text-muted-foreground" />
+                        </>
+                      )}
                     </button>
                   </div>
                 </div>
@@ -191,6 +336,12 @@ export function FamilyPlanSheet({ isOpen, onClose }: FamilyPlanSheetProps) {
                   Resgatar Cupom
                 </Button>
               )}
+
+              {/* Secure payment badge */}
+              <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+                <CreditCard className="w-3 h-3" />
+                <span>Pagamento seguro via Stripe</span>
+              </div>
 
               {/* Footer info */}
               <p className="text-xs text-center text-muted-foreground px-4">
@@ -210,7 +361,10 @@ export function FamilyPlanSheet({ isOpen, onClose }: FamilyPlanSheetProps) {
       <RedeemCouponSheet
         open={showRedeemCoupon}
         onClose={() => setShowRedeemCoupon(false)}
-        onSuccess={onClose}
+        onSuccess={() => {
+          refreshSubscriptionStatus();
+          refreshHouseholds();
+        }}
       />
     </>
   );

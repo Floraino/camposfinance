@@ -19,6 +19,8 @@ export interface HouseholdPlan {
   status: PlanStatus;
   started_at: string;
   expires_at: string | null;
+  pro_expires_at: string | null;
+  source: string | null;
   stripe_subscription_id: string | null;
   stripe_customer_id: string | null;
   created_at: string;
