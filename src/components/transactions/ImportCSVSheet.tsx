@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from "react";
-import { X, Upload, FileSpreadsheet, Loader2, CheckCircle, AlertCircle, ChevronRight, Download, RefreshCw, MinusCircle, ArrowUpCircle, ArrowDownCircle } from "lucide-react";
+import { X, Upload, FileSpreadsheet, Loader2, CheckCircle, AlertCircle, ChevronRight, Download, RefreshCw, MinusCircle, ArrowUpCircle, ArrowDownCircle, Wand2, FileDown, FileCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { useHousehold } from "@/hooks/useHousehold";
@@ -16,10 +16,17 @@ import {
   analyzeCSV,
   parseCSVWithMappings,
   importTransactions,
+  downloadCSVTemplate,
+  isStandardFormat,
+  parseStandardCSV,
+  convertBankStatement,
+  downloadConvertedCSV,
   type CSVAnalysis,
   type ColumnMapping,
   type ParsedRow,
   type ImportResult,
+  type ConvertedTransaction,
+  type ConversionResult,
 } from "@/services/csvImportService";
 
 interface ImportCSVSheetProps {
@@ -28,7 +35,8 @@ interface ImportCSVSheetProps {
   onImportComplete?: () => void;
 }
 
-type ImportStep = "upload" | "mapping" | "preview" | "importing" | "result";
+type ImportStep = "upload" | "mapping" | "preview" | "importing" | "result" | "convert-preview";
+type ImportMode = "standard" | "convert";
 
 const INTERNAL_FIELDS = [
   { value: "description", label: "Descrição" },
@@ -49,6 +57,7 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [step, setStep] = useState<ImportStep>("upload");
+  const [mode, setMode] = useState<ImportMode>("standard");
   const [isLoading, setIsLoading] = useState(false);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
@@ -59,16 +68,21 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
   const [parsedRows, setParsedRows] = useState<ParsedRow[]>([]);
   const [skipDuplicates, setSkipDuplicates] = useState(true);
 
+  // Conversion data
+  const [conversionResult, setConversionResult] = useState<ConversionResult | null>(null);
+
   // Import result
   const [importProgress, setImportProgress] = useState(0);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
 
   const resetState = useCallback(() => {
     setStep("upload");
+    setMode("standard");
     setCsvContent("");
     setAnalysis(null);
     setColumnMappings([]);
     setParsedRows([]);
+    setConversionResult(null);
     setImportResult(null);
     setImportProgress(0);
   }, []);
@@ -78,7 +92,7 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
     onClose();
   }, [resetState, onClose]);
 
-  const handleFileSelect = async (file: File) => {
+  const handleFileSelect = async (file: File, importMode: ImportMode = "standard") => {
     if (!file.name.toLowerCase().endsWith(".csv")) {
       toast({
         title: "Arquivo inválido",
@@ -94,15 +108,36 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
     }
 
     setIsLoading(true);
+    setMode(importMode);
+    
     try {
       const content = await file.text();
       setCsvContent(content);
 
-      // Analyze CSV with AI
-      const result = await analyzeCSV(content);
-      setAnalysis(result);
-      setColumnMappings(result.columnMappings);
-      setStep("mapping");
+      if (importMode === "convert") {
+        // Convert bank statement mode
+        const result = await convertBankStatement(content);
+        setConversionResult(result);
+        setStep("convert-preview");
+      } else {
+        // Standard mode - check if it's already in standard format
+        if (isStandardFormat(content)) {
+          // Skip AI analysis, parse directly
+          const parsed = parseStandardCSV(content);
+          setParsedRows(parsed);
+          setStep("preview");
+          toast({
+            title: "Formato padrão detectado",
+            description: "Pulando etapa de mapeamento",
+          });
+        } else {
+          // Analyze CSV with AI
+          const result = await analyzeCSV(content);
+          setAnalysis(result);
+          setColumnMappings(result.columnMappings);
+          setStep("mapping");
+        }
+      }
     } catch (error) {
       console.error("Error analyzing CSV:", error);
       toast({
@@ -116,6 +151,42 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
         fileInputRef.current.value = "";
       }
     }
+  };
+
+  const handleConvertAndImport = async () => {
+    if (!conversionResult || !currentHousehold?.id) return;
+
+    // Convert to ParsedRow format for importing
+    const parsed: ParsedRow[] = conversionResult.converted
+      .filter(c => c.status === "OK")
+      .map((c, idx) => ({
+        rowIndex: idx + 1,
+        raw: c.originalRow,
+        status: "OK" as const,
+        parsed: {
+          description: c.descricao,
+          amount: c.tipo === "EXPENSE" ? -Math.abs(c.valor) : Math.abs(c.valor),
+          type: c.tipo,
+          category: c.categoria as any,
+          payment_method: c.forma_pagamento as any,
+          status: "paid" as const,
+          transaction_date: c.data,
+          import_hash: `${c.data}|${c.valor}|${c.descricao}`.substring(0, 50),
+        },
+        errors: [],
+      }));
+
+    setParsedRows(parsed);
+    setStep("preview");
+  };
+
+  const handleDownloadConverted = () => {
+    if (!conversionResult) return;
+    downloadConvertedCSV(conversionResult.converted);
+    toast({
+      title: "CSV baixado",
+      description: "O arquivo convertido foi baixado com sucesso",
+    });
   };
 
   const updateMapping = (csvIndex: number, newField: string) => {
@@ -274,13 +345,13 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
           
           <div className="p-4 space-y-4 pb-safe">
             {/* Step Indicator */}
-            <div className="flex items-center gap-2 text-sm">
+            <div className="flex items-center gap-2 text-sm flex-wrap">
               <span className={step === "upload" ? "text-primary font-medium" : "text-muted-foreground"}>
                 1. Upload
               </span>
               <ChevronRight className="w-4 h-4 text-muted-foreground" />
-              <span className={step === "mapping" ? "text-primary font-medium" : "text-muted-foreground"}>
-                2. Mapeamento
+              <span className={step === "mapping" || step === "convert-preview" ? "text-primary font-medium" : "text-muted-foreground"}>
+                2. {mode === "convert" ? "Conversão" : "Mapeamento"}
               </span>
               <ChevronRight className="w-4 h-4 text-muted-foreground" />
               <span className={step === "preview" ? "text-primary font-medium" : "text-muted-foreground"}>
@@ -295,44 +366,258 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
             {/* Step 1: Upload */}
             {step === "upload" && (
               <>
+                {/* Download Template Button */}
                 <div className="glass-card p-4">
-                  <h3 className="font-semibold text-foreground mb-2">Detecção automática com IA</h3>
-                  <p className="text-sm text-muted-foreground">
-                    O sistema usa inteligência artificial para detectar automaticamente o formato do seu CSV 
-                    e mapear as colunas para os campos corretos.
-                  </p>
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
+                      <FileDown className="w-5 h-5 text-primary" />
+                    </div>
+                    <div className="flex-1">
+                      <h3 className="font-semibold text-foreground mb-1">Modelo CSV Padrão</h3>
+                      <p className="text-sm text-muted-foreground mb-2">
+                        Baixe o modelo padrão do app para preencher suas transações de forma estruturada.
+                      </p>
+                      <Button variant="outline" size="sm" onClick={() => downloadCSVTemplate()}>
+                        <Download className="w-4 h-4 mr-2" />
+                        Baixar Modelo CSV
+                      </Button>
+                    </div>
+                  </div>
                 </div>
 
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isLoading}
-                  className="w-full border-2 border-dashed border-border rounded-xl p-8 flex flex-col items-center gap-4 hover:border-primary transition-colors disabled:opacity-50"
-                >
-                  {isLoading ? (
-                    <>
-                      <Loader2 className="w-12 h-12 text-primary animate-spin" />
-                      <p className="text-sm font-medium text-foreground">Analisando CSV...</p>
-                    </>
-                  ) : (
-                    <>
-                      <div className="w-16 h-16 rounded-full bg-primary/20 flex items-center justify-center">
-                        <FileSpreadsheet className="w-8 h-8 text-primary" />
-                      </div>
-                      <div className="text-center">
-                        <p className="font-medium text-foreground">Toque para selecionar arquivo</p>
-                        <p className="text-sm text-muted-foreground">Formato CSV (.csv)</p>
-                      </div>
-                    </>
-                  )}
-                </button>
+                {/* Two import options */}
+                <div className="grid gap-3">
+                  {/* Standard Import */}
+                  <button
+                    onClick={() => {
+                      setMode("standard");
+                      fileInputRef.current?.click();
+                    }}
+                    disabled={isLoading}
+                    className="w-full border-2 border-dashed border-border rounded-xl p-6 flex items-center gap-4 hover:border-primary transition-colors disabled:opacity-50 text-left"
+                  >
+                    {isLoading && mode === "standard" ? (
+                      <>
+                        <Loader2 className="w-10 h-10 text-primary animate-spin flex-shrink-0" />
+                        <div>
+                          <p className="font-medium text-foreground">Analisando CSV...</p>
+                          <p className="text-sm text-muted-foreground">Detectando formato automaticamente</p>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="w-12 h-12 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
+                          <FileSpreadsheet className="w-6 h-6 text-primary" />
+                        </div>
+                        <div>
+                          <p className="font-medium text-foreground">Importar CSV</p>
+                          <p className="text-sm text-muted-foreground">
+                            Formato padrão ou extrato de banco
+                          </p>
+                        </div>
+                      </>
+                    )}
+                  </button>
+
+                  {/* Convert Bank Statement */}
+                  <button
+                    onClick={() => {
+                      setMode("convert");
+                      fileInputRef.current?.click();
+                    }}
+                    disabled={isLoading}
+                    className="w-full border-2 border-dashed border-accent/50 rounded-xl p-6 flex items-center gap-4 hover:border-accent transition-colors disabled:opacity-50 text-left bg-accent/5"
+                  >
+                    {isLoading && mode === "convert" ? (
+                      <>
+                        <Loader2 className="w-10 h-10 text-accent animate-spin flex-shrink-0" />
+                        <div>
+                          <p className="font-medium text-foreground">Convertendo extrato...</p>
+                          <p className="text-sm text-muted-foreground">Usando IA para mapear colunas</p>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="w-12 h-12 rounded-full bg-accent/20 flex items-center justify-center flex-shrink-0">
+                          <Wand2 className="w-6 h-6 text-accent" />
+                        </div>
+                        <div>
+                          <p className="font-medium text-foreground flex items-center gap-2">
+                            Conversor Inteligente
+                            <Badge variant="secondary" className="text-xs">IA</Badge>
+                          </p>
+                          <p className="text-sm text-muted-foreground">
+                            Converte extrato de qualquer banco para o formato padrão
+                          </p>
+                        </div>
+                      </>
+                    )}
+                  </button>
+                </div>
 
                 <input
                   ref={fileInputRef}
                   type="file"
                   accept=".csv"
                   className="hidden"
-                  onChange={(e) => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
+                  onChange={(e) => {
+                    if (e.target.files?.[0]) {
+                      handleFileSelect(e.target.files[0], mode);
+                    }
+                  }}
                 />
+              </>
+            )}
+
+            {/* Step: Convert Preview */}
+            {step === "convert-preview" && conversionResult && (
+              <>
+                <div className="glass-card p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <FileCheck className="w-5 h-5 text-primary" />
+                    <h3 className="font-semibold text-foreground">Extrato Convertido</h3>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    O extrato bancário foi analisado e convertido para o formato padrão do app.
+                  </p>
+                </div>
+
+                {/* Summary Cards */}
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="glass-card p-2 text-center">
+                    <p className="text-xl font-bold text-primary">{conversionResult.summary.ok}</p>
+                    <p className="text-xs text-muted-foreground">Convertidas</p>
+                  </div>
+                  <div className="glass-card p-2 text-center">
+                    <p className="text-xl font-bold text-muted-foreground">{conversionResult.summary.skipped}</p>
+                    <p className="text-xs text-muted-foreground">Ignoradas</p>
+                  </div>
+                  <div className="glass-card p-2 text-center">
+                    <p className="text-xl font-bold text-destructive">{conversionResult.summary.errors}</p>
+                    <p className="text-xs text-muted-foreground">Erros</p>
+                  </div>
+                </div>
+
+                {/* Income/Expense Summary */}
+                <div className="flex items-center justify-center gap-6 text-sm">
+                  <div className="flex items-center gap-2 text-success">
+                    <ArrowUpCircle className="w-5 h-5" />
+                    <span className="font-medium">
+                      R$ {conversionResult.summary.totalIncome.toFixed(2)}
+                    </span>
+                    <span className="text-muted-foreground">receitas</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-destructive">
+                    <ArrowDownCircle className="w-5 h-5" />
+                    <span className="font-medium">
+                      R$ {conversionResult.summary.totalExpense.toFixed(2)}
+                    </span>
+                    <span className="text-muted-foreground">despesas</span>
+                  </div>
+                </div>
+
+                {/* Converted Transactions Table */}
+                <Tabs defaultValue="ok" className="w-full">
+                  <TabsList className="w-full">
+                    <TabsTrigger value="ok" className="flex-1">
+                      OK ({conversionResult.summary.ok})
+                    </TabsTrigger>
+                    <TabsTrigger value="skipped" className="flex-1">
+                      Ignoradas ({conversionResult.summary.skipped})
+                    </TabsTrigger>
+                    <TabsTrigger value="errors" className="flex-1">
+                      Erros ({conversionResult.summary.errors})
+                    </TabsTrigger>
+                  </TabsList>
+
+                  <TabsContent value="ok" className="mt-2">
+                    <div className="glass-card p-2 max-h-[200px] overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Data</TableHead>
+                            <TableHead>Descrição</TableHead>
+                            <TableHead className="text-right">Valor</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {conversionResult.converted.filter(c => c.status === "OK").slice(0, 20).map((tx, idx) => (
+                            <TableRow key={idx}>
+                              <TableCell className="text-xs">{tx.data}</TableCell>
+                              <TableCell className="text-sm truncate max-w-[120px]">{tx.descricao}</TableCell>
+                              <TableCell className={`text-right text-sm font-medium ${tx.tipo === "INCOME" ? "text-success" : "text-destructive"}`}>
+                                {tx.tipo === "INCOME" ? "+" : "-"}R$ {tx.valor.toFixed(2)}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="skipped" className="mt-2">
+                    <div className="glass-card p-2 max-h-[200px] overflow-y-auto">
+                      {conversionResult.summary.skipped === 0 ? (
+                        <p className="text-sm text-muted-foreground text-center py-4">Nenhuma linha ignorada</p>
+                      ) : (
+                        <ul className="space-y-1">
+                          {conversionResult.converted.filter(c => c.status === "SKIPPED").slice(0, 10).map((tx, idx) => (
+                            <li key={idx} className="text-xs text-muted-foreground p-2 bg-muted/30 rounded">
+                              <span className="text-foreground">{tx.originalRow.substring(0, 50)}...</span>
+                              <br />
+                              <Badge variant="secondary" className="mt-1 text-xs">
+                                <MinusCircle className="w-3 h-3 mr-1" />
+                                {tx.reason}
+                              </Badge>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="errors" className="mt-2">
+                    <div className="glass-card p-2 max-h-[200px] overflow-y-auto">
+                      {conversionResult.summary.errors === 0 ? (
+                        <p className="text-sm text-muted-foreground text-center py-4">Nenhum erro</p>
+                      ) : (
+                        <ul className="space-y-1">
+                          {conversionResult.converted.filter(c => c.status === "ERROR").slice(0, 10).map((tx, idx) => (
+                            <li key={idx} className="text-xs text-muted-foreground p-2 bg-destructive/10 rounded">
+                              <span className="text-foreground">{tx.originalRow.substring(0, 50)}...</span>
+                              <br />
+                              <Badge variant="destructive" className="mt-1 text-xs">
+                                <AlertCircle className="w-3 h-3 mr-1" />
+                                {tx.reason}
+                              </Badge>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </TabsContent>
+                </Tabs>
+
+                {/* Action Buttons */}
+                <div className="flex gap-3">
+                  <Button variant="outline" onClick={handleDownloadConverted} className="flex-1">
+                    <Download className="w-4 h-4 mr-2" />
+                    Baixar CSV Convertido
+                  </Button>
+                </div>
+                <div className="flex gap-3">
+                  <Button variant="outline" onClick={() => setStep("upload")} className="flex-1">
+                    Voltar
+                  </Button>
+                  <Button 
+                    variant="accent" 
+                    onClick={handleConvertAndImport} 
+                    className="flex-1"
+                    disabled={conversionResult.summary.ok === 0}
+                  >
+                    Importar {conversionResult.summary.ok} transações
+                  </Button>
+                </div>
               </>
             )}
 
@@ -450,11 +735,11 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                 {/* Income/Expense breakdown */}
                 {validCount > 0 && (
                   <div className="flex items-center gap-4 text-sm">
-                    <div className="flex items-center gap-1 text-green-600">
+                    <div className="flex items-center gap-1 text-success">
                       <ArrowUpCircle className="w-4 h-4" />
                       <span>{incomeCount} receitas</span>
                     </div>
-                    <div className="flex items-center gap-1 text-red-500">
+                    <div className="flex items-center gap-1 text-destructive">
                       <ArrowDownCircle className="w-4 h-4" />
                       <span>{expenseCount} despesas</span>
                     </div>
@@ -504,16 +789,16 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                               <TableCell className="text-sm truncate max-w-[120px]">
                                 {row.parsed?.description}
                               </TableCell>
-                              <TableCell className={`text-right text-sm font-medium ${row.parsed?.type === "INCOME" ? "text-green-600" : "text-red-500"}`}>
+                              <TableCell className={`text-right text-sm font-medium ${row.parsed?.type === "INCOME" ? "text-success" : "text-destructive"}`}>
                                 {row.parsed?.type === "INCOME" ? "+" : "-"}R$ {Math.abs(row.parsed?.amount || 0).toFixed(2)}
                               </TableCell>
                               <TableCell>
                                 {row.parsed?.type === "INCOME" ? (
-                                  <Badge variant="outline" className="text-xs bg-green-500/10 text-green-600 border-green-500/30">
+                                  <Badge variant="outline" className="text-xs bg-success/10 text-success border-success/30">
                                     Receita
                                   </Badge>
                                 ) : (
-                                  <Badge variant="outline" className="text-xs bg-red-500/10 text-red-500 border-red-500/30">
+                                  <Badge variant="outline" className="text-xs bg-destructive/10 text-destructive border-destructive/30">
                                     Despesa
                                   </Badge>
                                 )}
