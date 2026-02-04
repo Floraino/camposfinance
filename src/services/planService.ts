@@ -153,15 +153,15 @@ export async function downgradeToBasic(householdId: string): Promise<HouseholdPl
 // PRO plan pricing
 export const PRO_PRICING = {
   monthly: {
-    amount: 19.90,
+    amount: 9.90,
     currency: "BRL",
     interval: "month" as const,
   },
   yearly: {
-    amount: 199.00,
+    amount: 89.90,
     currency: "BRL",
     interval: "year" as const,
-    savings: "2 meses grátis",
+    savings: "Economize R$ 28,90/ano",
   },
 };
 
