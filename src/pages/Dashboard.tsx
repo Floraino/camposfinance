@@ -20,6 +20,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Progress } from "@/components/ui/progress";
 import { supabase } from "@/integrations/supabase/client";
 import { ProBadge } from "@/components/paywall/ProBadge";
+import { PendingWidget } from "@/components/pending/PendingWidget";
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -347,6 +348,9 @@ export default function Dashboard() {
           </div>
           <ChevronRight className="w-5 h-5 text-muted-foreground flex-shrink-0" />
         </button>
+
+        {/* Pending Items Widget */}
+        <PendingWidget householdId={currentHousehold.id} className="mb-6" />
 
         {/* Quick Actions */}
         <div className="flex gap-3 mb-6">

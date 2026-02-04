@@ -6,24 +6,18 @@ import { useToast } from "@/hooks/use-toast";
 import { 
   getAllPendingItems, 
   deleteDuplicates,
+  getUncategorizedTransactions,
+  getDuplicateTransactions,
   type PendingSummary, 
   type PendingItem 
 } from "@/services/pendingItemsService";
 import { recategorizeAllTransactions } from "@/services/categorizationService";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { 
-  AlertTriangle, 
-  Tag, 
-  Copy, 
-  Users, 
-  Crown, 
   Loader2, 
   RefreshCw,
-  ChevronRight,
   Sparkles,
-  Trash2
+  CheckCircle2
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -36,20 +30,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-
-const iconMap = {
-  uncategorized: Tag,
-  duplicate: Copy,
-  pending_split: Users,
-  pro_expiring: Crown,
-  no_account: AlertTriangle,
-};
-
-const severityColors = {
-  info: "bg-blue-500/10 text-blue-500 border-blue-500/20",
-  warning: "bg-amber-500/10 text-amber-500 border-amber-500/20",
-  error: "bg-destructive/10 text-destructive border-destructive/20",
-};
+import { UncategorizedCard } from "@/components/pending/UncategorizedCard";
+import { DuplicatesCard } from "@/components/pending/DuplicatesCard";
+import { PendingItemCard } from "@/components/pending/PendingItemCard";
+import type { Transaction } from "@/services/transactionService";
 
 export default function PendingItems() {
   const navigate = useNavigate();
@@ -57,8 +41,11 @@ export default function PendingItems() {
   const { toast } = useToast();
   
   const [summary, setSummary] = useState<PendingSummary | null>(null);
+  const [uncategorizedTxs, setUncategorizedTxs] = useState<Transaction[]>([]);
+  const [duplicateGroups, setDuplicateGroups] = useState<Transaction[][]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [processingAction, setProcessingAction] = useState<string | undefined>();
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [selectedDuplicates, setSelectedDuplicates] = useState<string[]>([]);
 
@@ -73,8 +60,14 @@ export default function PendingItems() {
     
     setIsLoading(true);
     try {
-      const data = await getAllPendingItems(currentHousehold.id);
-      setSummary(data);
+      const [summaryData, uncategorized, duplicates] = await Promise.all([
+        getAllPendingItems(currentHousehold.id),
+        getUncategorizedTransactions(currentHousehold.id),
+        getDuplicateTransactions(currentHousehold.id),
+      ]);
+      setSummary(summaryData);
+      setUncategorizedTxs(uncategorized);
+      setDuplicateGroups(duplicates);
     } catch (error) {
       console.error("Error loading pending items:", error);
       toast({
@@ -86,43 +79,35 @@ export default function PendingItems() {
     }
   };
 
-  const handleAction = async (item: PendingItem, action: string) => {
-    if (action === "categorize_all") {
-      setIsProcessing(true);
-      try {
-        const result = await recategorizeAllTransactions();
-        toast({
-          title: "Categorização concluída",
-          description: `${result.updated} transação(ões) atualizada(s)`,
-        });
-        await loadPendingItems();
-      } catch (error) {
-        toast({
-          title: "Erro ao categorizar",
-          variant: "destructive",
-        });
-      } finally {
-        setIsProcessing(false);
-      }
-    } else if (action === "view_uncategorized") {
-      navigate("/transactions?filter=uncategorized");
-    } else if (action === "review_duplicates") {
-      // Show duplicates for deletion
-      const groups = item.data?.groups as Array<Array<{ id: string }>>;
-      if (groups) {
-        // Get all IDs except the first of each group (keep first, suggest deleting rest)
-        const toDelete = groups.flatMap(group => group.slice(1).map(tx => tx.id));
-        setSelectedDuplicates(toDelete);
-        setShowDeleteDialog(true);
-      }
-    } else if (action.startsWith("view_split:")) {
-      navigate("/splits");
-    } else if (action === "renew_pro") {
-      navigate("/subscribe");
+  const handleCategorizeAll = async () => {
+    setIsProcessing(true);
+    setProcessingAction("categorize_all");
+    try {
+      const result = await recategorizeAllTransactions();
+      toast({
+        title: "Categorização concluída",
+        description: `${result.updated} transação(ões) atualizada(s)`,
+      });
+      await loadPendingItems();
+    } catch (error) {
+      toast({
+        title: "Erro ao categorizar",
+        variant: "destructive",
+      });
+    } finally {
+      setIsProcessing(false);
+      setProcessingAction(undefined);
     }
   };
 
-  const handleDeleteDuplicates = async () => {
+  const handleDeleteDuplicates = async (ids: string[]) => {
+    if (!currentHousehold?.id || ids.length === 0) return;
+
+    setSelectedDuplicates(ids);
+    setShowDeleteDialog(true);
+  };
+
+  const confirmDeleteDuplicates = async () => {
     if (!currentHousehold?.id || selectedDuplicates.length === 0) return;
 
     setIsProcessing(true);
@@ -145,6 +130,20 @@ export default function PendingItems() {
     }
   };
 
+  const handleItemAction = async (item: PendingItem, action: string) => {
+    if (action.startsWith("view_split:")) {
+      navigate("/splits");
+    } else if (action === "renew_pro") {
+      navigate("/subscribe");
+    }
+  };
+
+  // Filter out uncategorized and duplicate items from the main list
+  // since they have dedicated cards
+  const otherItems = summary?.items.filter(
+    (item) => item.type !== "uncategorized" && item.type !== "duplicate"
+  ) || [];
+
   if (householdLoading || isLoading) {
     return (
       <MobileLayout>
@@ -155,6 +154,11 @@ export default function PendingItems() {
     );
   }
 
+  const hasNoPendingItems = 
+    uncategorizedTxs.length === 0 && 
+    duplicateGroups.length === 0 && 
+    otherItems.length === 0;
+
   return (
     <MobileLayout>
       <div className="px-4 pt-safe pb-24">
@@ -163,9 +167,9 @@ export default function PendingItems() {
           <div>
             <h1 className="text-2xl font-bold text-foreground">Pendências</h1>
             <p className="text-sm text-muted-foreground">
-              {summary?.total === 0 
+              {hasNoPendingItems 
                 ? "Tudo em dia! 🎉" 
-                : `${summary?.total} item(ns) para revisar`}
+                : `${(summary?.total || 0)} item(ns) para revisar`}
             </p>
           </div>
           <Button 
@@ -178,89 +182,48 @@ export default function PendingItems() {
           </Button>
         </header>
 
-        {/* Summary Cards */}
-        {summary && summary.total > 0 && (
-          <div className="grid grid-cols-2 gap-3 mb-6">
-            {Object.entries(summary.byType).map(([type, count]) => {
-              const Icon = iconMap[type as keyof typeof iconMap] || AlertTriangle;
-              return (
-                <Card key={type} className="glass-card">
-                  <CardContent className="p-4 flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-                      <Icon className="w-5 h-5 text-primary" />
-                    </div>
-                    <div>
-                      <p className="text-2xl font-bold text-foreground">{count}</p>
-                      <p className="text-xs text-muted-foreground capitalize">
-                        {type.replace("_", " ")}
-                      </p>
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Pending Items List */}
+        {/* Pending Items */}
         <div className="space-y-4">
-          {summary?.items.map((item) => {
-            const Icon = iconMap[item.type as keyof typeof iconMap] || AlertTriangle;
-            
-            return (
-              <Card 
-                key={item.id} 
-                className={cn("glass-card border", severityColors[item.severity])}
-              >
-                <CardHeader className="pb-2">
-                  <div className="flex items-start gap-3">
-                    <div className={cn(
-                      "w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0",
-                      item.severity === "warning" && "bg-amber-500/20",
-                      item.severity === "error" && "bg-destructive/20",
-                      item.severity === "info" && "bg-blue-500/20",
-                    )}>
-                      <Icon className="w-5 h-5" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <CardTitle className="text-base">{item.title}</CardTitle>
-                      <CardDescription>{item.description}</CardDescription>
-                    </div>
-                  </div>
-                </CardHeader>
-                {item.actions && item.actions.length > 0 && (
-                  <CardContent className="pt-2">
-                    <div className="flex gap-2 flex-wrap">
-                      {item.actions.map((action, idx) => (
-                        <Button
-                          key={idx}
-                          size="sm"
-                          variant={action.variant === "destructive" ? "destructive" : "secondary"}
-                          onClick={() => handleAction(item, action.action)}
-                          disabled={isProcessing}
-                          className="gap-1"
-                        >
-                          {isProcessing && action.action === "categorize_all" ? (
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                          ) : action.action === "categorize_all" ? (
-                            <Sparkles className="w-3 h-3" />
-                          ) : null}
-                          {action.label}
-                        </Button>
-                      ))}
-                    </div>
-                  </CardContent>
-                )}
-              </Card>
-            );
-          })}
+          {/* Uncategorized Card */}
+          {uncategorizedTxs.length > 0 && currentHousehold && (
+            <UncategorizedCard
+              transactions={uncategorizedTxs}
+              total={uncategorizedTxs.length}
+              onCategorizeAll={handleCategorizeAll}
+              onViewAll={() => navigate("/transactions?filter=uncategorized")}
+              onRefresh={loadPendingItems}
+              householdId={currentHousehold.id}
+              isProcessing={isProcessing && processingAction === "categorize_all"}
+            />
+          )}
+
+          {/* Duplicates Card */}
+          {duplicateGroups.length > 0 && (
+            <DuplicatesCard
+              groups={duplicateGroups}
+              totalDuplicates={duplicateGroups.reduce((sum, group) => sum + group.length - 1, 0)}
+              onDeleteSelected={handleDeleteDuplicates}
+              isProcessing={isProcessing}
+            />
+          )}
+
+          {/* Other Pending Items */}
+          {otherItems.map((item) => (
+            <PendingItemCard
+              key={item.id}
+              item={item}
+              onAction={(action) => handleItemAction(item, action)}
+              isProcessing={isProcessing}
+              processingAction={processingAction}
+            />
+          ))}
         </div>
 
         {/* Empty State */}
-        {summary?.total === 0 && (
+        {hasNoPendingItems && (
           <div className="text-center py-12">
             <div className="w-16 h-16 rounded-full bg-success/10 flex items-center justify-center mx-auto mb-4">
-              <Sparkles className="w-8 h-8 text-success" />
+              <CheckCircle2 className="w-8 h-8 text-success" />
             </div>
             <h3 className="text-lg font-semibold text-foreground mb-2">
               Tudo em dia!
@@ -278,21 +241,18 @@ export default function PendingItems() {
           <AlertDialogHeader>
             <AlertDialogTitle>Remover duplicatas?</AlertDialogTitle>
             <AlertDialogDescription>
-              {selectedDuplicates.length} transação(ões) serão removidas. 
-              A primeira de cada grupo será mantida.
+              {selectedDuplicates.length} transação(ões) serão removidas permanentemente.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancelar</AlertDialogCancel>
             <AlertDialogAction
-              onClick={handleDeleteDuplicates}
+              onClick={confirmDeleteDuplicates}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               {isProcessing ? (
                 <Loader2 className="w-4 h-4 animate-spin mr-2" />
-              ) : (
-                <Trash2 className="w-4 h-4 mr-2" />
-              )}
+              ) : null}
               Remover {selectedDuplicates.length}
             </AlertDialogAction>
           </AlertDialogFooter>
