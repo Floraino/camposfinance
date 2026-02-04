@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { User, Session } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
+import { secureLogout } from "@/services/secureAuthService";
 
 interface Profile {
   id: string;
@@ -110,7 +111,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    // Use secure logout to revoke sessions server-side
+    await secureLogout();
   };
 
   return (
