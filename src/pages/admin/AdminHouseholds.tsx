@@ -1,6 +1,13 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { getAdminHouseholds, grantProDays, setHouseholdPlan, AdminHousehold } from "@/services/adminService";
+import { 
+  getAdminHouseholds, 
+  grantProDays, 
+  setHouseholdPlan, 
+  deleteHousehold, 
+  updateHouseholdName,
+  AdminHousehold 
+} from "@/services/adminService";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,9 +17,20 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { 
   ArrowLeft, Search, Home, Crown, Users, 
-  CreditCard, Loader2, Plus, Calendar, AlertTriangle
+  CreditCard, Loader2, Plus, Calendar, AlertTriangle,
+  Trash2, Pencil
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -23,7 +41,10 @@ export default function AdminHouseholds() {
   const [selectedHousehold, setSelectedHousehold] = useState<AdminHousehold | null>(null);
   const [showDetail, setShowDetail] = useState(false);
   const [showGrantDays, setShowGrantDays] = useState(false);
+  const [showEditName, setShowEditName] = useState(false);
+  const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [daysToGrant, setDaysToGrant] = useState("30");
+  const [newName, setNewName] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const { toast } = useToast();
 
@@ -70,11 +91,10 @@ export default function AdminHouseholds() {
   const handleSetBasic = async () => {
     if (!selectedHousehold) return;
     
-    // Check if household has more than 2 accounts
     if ((selectedHousehold.accounts_count || 0) > 2) {
       toast({
         title: "Atenção",
-        description: `Esta família tem ${selectedHousehold.accounts_count} contas. No BASIC, o limite é 2. As contas existentes não serão excluídas, mas não poderão criar novas.`,
+        description: `Esta família tem ${selectedHousehold.accounts_count} contas. No BASIC, o limite é 2.`,
         variant: "destructive",
       });
     }
@@ -91,6 +111,40 @@ export default function AdminHouseholds() {
       }
     } catch (error) {
       toast({ title: "Erro", description: "Falha ao alterar plano", variant: "destructive" });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleDeleteHousehold = async () => {
+    if (!selectedHousehold) return;
+    
+    setIsProcessing(true);
+    try {
+      await deleteHousehold(selectedHousehold.id);
+      toast({ title: "Família excluída", description: "Todos os dados foram removidos." });
+      loadHouseholds(search || undefined);
+      setShowConfirmDelete(false);
+      setShowDetail(false);
+    } catch (error) {
+      toast({ title: "Erro", description: "Falha ao excluir família", variant: "destructive" });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleUpdateName = async () => {
+    if (!selectedHousehold || !newName.trim()) return;
+    
+    setIsProcessing(true);
+    try {
+      await updateHouseholdName(selectedHousehold.id, newName.trim());
+      toast({ title: "Nome atualizado" });
+      loadHouseholds(search || undefined);
+      setShowEditName(false);
+      setSelectedHousehold({ ...selectedHousehold, name: newName.trim() });
+    } catch (error) {
+      toast({ title: "Erro", description: "Falha ao atualizar nome", variant: "destructive" });
     } finally {
       setIsProcessing(false);
     }
@@ -142,6 +196,7 @@ export default function AdminHouseholds() {
                 className="p-4 cursor-pointer hover:bg-card/80 transition-colors"
                 onClick={() => {
                   setSelectedHousehold(household);
+                  setNewName(household.name);
                   setShowDetail(true);
                 }}
               >
@@ -252,6 +307,15 @@ export default function AdminHouseholds() {
                   Conceder Dias Pro
                 </Button>
 
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => setShowEditName(true)}
+                >
+                  <Pencil className="w-4 h-4 mr-2" />
+                  Editar Nome
+                </Button>
+
                 {selectedHousehold.plan?.plan === "PRO" && (
                   <Button
                     variant="outline"
@@ -262,6 +326,15 @@ export default function AdminHouseholds() {
                     {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Voltar para BASIC"}
                   </Button>
                 )}
+
+                <Button
+                  variant="destructive"
+                  className="w-full"
+                  onClick={() => setShowConfirmDelete(true)}
+                >
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Excluir Família
+                </Button>
               </div>
             </div>
           )}
@@ -318,6 +391,55 @@ export default function AdminHouseholds() {
           </div>
         </SheetContent>
       </Sheet>
+
+      {/* Edit Name Sheet */}
+      <Sheet open={showEditName} onOpenChange={setShowEditName}>
+        <SheetContent side="bottom" className="h-auto rounded-t-3xl pb-safe">
+          <SheetHeader className="mb-4">
+            <SheetTitle>Editar Nome da Família</SheetTitle>
+          </SheetHeader>
+
+          <div className="space-y-4">
+            <Input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="Nome da família"
+            />
+
+            <Button
+              variant="accent"
+              className="w-full"
+              onClick={handleUpdateName}
+              disabled={isProcessing || !newName.trim()}
+            >
+              {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Salvar"}
+            </Button>
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {/* Confirm Delete Dialog */}
+      <AlertDialog open={showConfirmDelete} onOpenChange={setShowConfirmDelete}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir família?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Esta ação é irreversível. Todos os dados serão excluídos permanentemente:
+              membros, contas, transações, orçamentos e categorias.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteHousehold}
+              disabled={isProcessing}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Excluir"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

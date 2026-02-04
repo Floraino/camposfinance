@@ -1,6 +1,13 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { getAdminUsers, setUserBlocked, setUserRole, AdminUser } from "@/services/adminService";
+import { 
+  getAdminUsers, 
+  setUserBlocked, 
+  setUserRole, 
+  deleteUserProfile,
+  updateUserDisplayName,
+  AdminUser 
+} from "@/services/adminService";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,7 +29,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { 
   ArrowLeft, Search, User, Shield, Ban,
-  Loader2, Home, Check
+  Loader2, Home, Trash2, Pencil
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -34,6 +41,9 @@ export default function AdminUsers() {
   const [showDetail, setShowDetail] = useState(false);
   const [showConfirmAdmin, setShowConfirmAdmin] = useState(false);
   const [showConfirmBlock, setShowConfirmBlock] = useState(false);
+  const [showConfirmDelete, setShowConfirmDelete] = useState(false);
+  const [showEditName, setShowEditName] = useState(false);
+  const [newDisplayName, setNewDisplayName] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const { toast } = useToast();
 
@@ -96,6 +106,40 @@ export default function AdminUsers() {
     }
   };
 
+  const handleDeleteUser = async () => {
+    if (!selectedUser) return;
+    
+    setIsProcessing(true);
+    try {
+      await deleteUserProfile(selectedUser.user_id);
+      toast({ title: "Usuário excluído", description: "Perfil e dados removidos." });
+      loadUsers(search || undefined);
+      setShowConfirmDelete(false);
+      setShowDetail(false);
+    } catch (error) {
+      toast({ title: "Erro", description: "Falha ao excluir usuário", variant: "destructive" });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleUpdateDisplayName = async () => {
+    if (!selectedUser || !newDisplayName.trim()) return;
+    
+    setIsProcessing(true);
+    try {
+      await updateUserDisplayName(selectedUser.user_id, newDisplayName.trim());
+      toast({ title: "Nome atualizado" });
+      loadUsers(search || undefined);
+      setShowEditName(false);
+      setSelectedUser({ ...selectedUser, display_name: newDisplayName.trim() });
+    } catch (error) {
+      toast({ title: "Erro", description: "Falha ao atualizar nome", variant: "destructive" });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
@@ -139,6 +183,7 @@ export default function AdminUsers() {
                 }`}
                 onClick={() => {
                   setSelectedUser(user);
+                  setNewDisplayName(user.display_name);
                   setShowDetail(true);
                 }}
               >
@@ -213,6 +258,15 @@ export default function AdminUsers() {
               {/* Actions */}
               <div className="space-y-2">
                 <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => setShowEditName(true)}
+                >
+                  <Pencil className="w-4 h-4 mr-2" />
+                  Editar Nome
+                </Button>
+
+                <Button
                   variant={selectedUser.is_blocked ? "accent" : "outline"}
                   className="w-full"
                   onClick={() => setShowConfirmBlock(true)}
@@ -229,9 +283,44 @@ export default function AdminUsers() {
                   <Shield className="w-4 h-4 mr-2" />
                   {selectedUser.role === "super_admin" ? "Revogar Admin" : "Promover a Admin"}
                 </Button>
+
+                <Button
+                  variant="destructive"
+                  className="w-full"
+                  onClick={() => setShowConfirmDelete(true)}
+                >
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Excluir Usuário
+                </Button>
               </div>
             </div>
           )}
+        </SheetContent>
+      </Sheet>
+
+      {/* Edit Name Sheet */}
+      <Sheet open={showEditName} onOpenChange={setShowEditName}>
+        <SheetContent side="bottom" className="h-auto rounded-t-3xl pb-safe">
+          <SheetHeader className="mb-4">
+            <SheetTitle>Editar Nome do Usuário</SheetTitle>
+          </SheetHeader>
+
+          <div className="space-y-4">
+            <Input
+              value={newDisplayName}
+              onChange={(e) => setNewDisplayName(e.target.value)}
+              placeholder="Nome de exibição"
+            />
+
+            <Button
+              variant="accent"
+              className="w-full"
+              onClick={handleUpdateDisplayName}
+              disabled={isProcessing || !newDisplayName.trim()}
+            >
+              {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Salvar"}
+            </Button>
+          </div>
         </SheetContent>
       </Sheet>
 
@@ -274,6 +363,30 @@ export default function AdminUsers() {
             <AlertDialogCancel>Cancelar</AlertDialogCancel>
             <AlertDialogAction onClick={handleToggleAdmin} disabled={isProcessing}>
               {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Confirmar"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Confirm Delete Dialog */}
+      <AlertDialog open={showConfirmDelete} onOpenChange={setShowConfirmDelete}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir usuário?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Esta ação remove o perfil, preferências e roles do usuário.
+              O usuário será removido de todas as famílias.
+              A conta de autenticação não será excluída.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteUser}
+              disabled={isProcessing}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Excluir"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
