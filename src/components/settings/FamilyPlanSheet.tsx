@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { X, Crown, Check, ChevronRight, Home, Users } from "lucide-react";
+import { X, Crown, Check, ChevronRight, Home, Users, Ticket } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useHousehold } from "@/hooks/useHousehold";
 import { PLAN_COMPARISON, PRO_PRICING } from "@/services/planService";
 import { PlanBadge } from "@/components/paywall/PlanBadge";
 import { UpgradeModal } from "@/components/paywall/UpgradeModal";
+import { RedeemCouponSheet } from "./RedeemCouponSheet";
 
 interface FamilyPlanSheetProps {
   isOpen: boolean;
@@ -15,6 +16,7 @@ interface FamilyPlanSheetProps {
 export function FamilyPlanSheet({ isOpen, onClose }: FamilyPlanSheetProps) {
   const { currentHousehold, planType, isAdmin, plan, households } = useHousehold();
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [showRedeemCoupon, setShowRedeemCoupon] = useState(false);
   const isPro = planType === "PRO";
 
   const formatDate = (dateString: string | null) => {
@@ -178,6 +180,18 @@ export function FamilyPlanSheet({ isOpen, onClose }: FamilyPlanSheetProps) {
                 </div>
               )}
 
+              {/* Redeem Coupon - only for admins */}
+              {isAdmin && (
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => setShowRedeemCoupon(true)}
+                >
+                  <Ticket className="w-4 h-4 mr-2" />
+                  Resgatar Cupom
+                </Button>
+              )}
+
               {/* Footer info */}
               <p className="text-xs text-center text-muted-foreground px-4">
                 O plano é compartilhado por todos os membros da família "{currentHousehold?.name}".
@@ -191,6 +205,12 @@ export function FamilyPlanSheet({ isOpen, onClose }: FamilyPlanSheetProps) {
       <UpgradeModal
         isOpen={showUpgradeModal}
         onClose={() => setShowUpgradeModal(false)}
+      />
+
+      <RedeemCouponSheet
+        open={showRedeemCoupon}
+        onClose={() => setShowRedeemCoupon(false)}
+        onSuccess={onClose}
       />
     </>
   );

@@ -5,8 +5,9 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import { useHousehold } from "@/hooks/useHousehold";
+import { useAdmin } from "@/hooks/useAdmin";
 import { useTheme } from "@/components/providers/ThemeProvider";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { FamilyMembersSheet } from "@/components/settings/FamilyMembersSheet";
@@ -23,6 +24,7 @@ import { HouseholdSwitcher } from "@/components/household/HouseholdSwitcher";
 export default function Settings() {
   const { profile, user, signOut } = useAuth();
   const { currentHousehold, planType, isAdmin, canExportReports } = useHousehold();
+  const { isSuperAdmin } = useAdmin();
   const { resolvedTheme, setTheme } = useTheme();
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -481,6 +483,31 @@ export default function Settings() {
               </button>
             </div>
           </div>
+
+          {/* Admin Panel - Only for Super Admins */}
+          {isSuperAdmin && (
+            <div>
+              <h3 className="text-sm font-medium text-destructive mb-3 px-1">
+                Administração
+              </h3>
+              <Link to="/admin">
+                <div className="glass-card overflow-hidden border-destructive/30">
+                  <div className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors">
+                    <div className="w-10 h-10 rounded-xl bg-destructive/20 flex items-center justify-center">
+                      <Shield className="w-5 h-5 text-destructive" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-foreground">Painel Admin</p>
+                      <p className="text-sm text-muted-foreground truncate">
+                        Área restrita do sistema
+                      </p>
+                    </div>
+                    <ChevronRight className="w-5 h-5 text-muted-foreground" />
+                  </div>
+                </div>
+              </Link>
+            </div>
+          )}
 
           {/* Logout */}
           <button 
