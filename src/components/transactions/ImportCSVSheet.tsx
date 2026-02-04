@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from "react";
-import { X, Upload, FileSpreadsheet, Loader2, CheckCircle, AlertCircle, ChevronRight, Download, RefreshCw } from "lucide-react";
+import { X, Upload, FileSpreadsheet, Loader2, CheckCircle, AlertCircle, ChevronRight, Download, RefreshCw, MinusCircle, ArrowUpCircle, ArrowDownCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { useHousehold } from "@/hooks/useHousehold";
@@ -11,6 +11,7 @@ import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   analyzeCSV,
   parseCSVWithMappings,
@@ -32,6 +33,8 @@ type ImportStep = "upload" | "mapping" | "preview" | "importing" | "result";
 const INTERNAL_FIELDS = [
   { value: "description", label: "Descrição" },
   { value: "amount", label: "Valor" },
+  { value: "entrada", label: "Entrada (Receita)" },
+  { value: "saida", label: "Saída (Despesa)" },
   { value: "date", label: "Data" },
   { value: "category", label: "Categoria" },
   { value: "payment_method", label: "Forma de Pagamento" },
@@ -151,7 +154,8 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
         columnMappings,
         analysis.separator,
         analysis.hasHeader,
-        analysis.dateFormat
+        analysis.dateFormat,
+        analysis.hasEntradaSaida
       );
       setParsedRows(parsed);
       setStep("preview");
@@ -233,8 +237,11 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
 
   if (!isOpen) return null;
 
-  const validCount = parsedRows.filter(r => r.parsed !== null).length;
-  const errorCount = parsedRows.filter(r => r.parsed === null).length;
+  const validCount = parsedRows.filter(r => r.status === "OK").length;
+  const skippedCount = parsedRows.filter(r => r.status === "SKIPPED").length;
+  const errorCount = parsedRows.filter(r => r.status === "ERROR").length;
+  const incomeCount = parsedRows.filter(r => r.parsed?.type === "INCOME").length;
+  const expenseCount = parsedRows.filter(r => r.parsed?.type === "EXPENSE").length;
 
   // Get available columns from CSV
   const csvHeaders = analysis?.sampleRows[0]?._raw?.split(analysis.separator).map((h, i) => ({
@@ -424,16 +431,35 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
             {/* Step 3: Preview */}
             {step === "preview" && (
               <>
-                <div className="flex items-center gap-4">
-                  <div className="flex-1 glass-card p-3 text-center">
-                    <p className="text-2xl font-bold text-primary">{validCount}</p>
-                    <p className="text-xs text-muted-foreground">Válidas</p>
+                {/* Summary cards */}
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="glass-card p-2 text-center">
+                    <p className="text-xl font-bold text-primary">{validCount}</p>
+                    <p className="text-xs text-muted-foreground">OK</p>
                   </div>
-                  <div className="flex-1 glass-card p-3 text-center">
-                    <p className="text-2xl font-bold text-destructive">{errorCount}</p>
-                    <p className="text-xs text-muted-foreground">Com erros</p>
+                  <div className="glass-card p-2 text-center">
+                    <p className="text-xl font-bold text-muted-foreground">{skippedCount}</p>
+                    <p className="text-xs text-muted-foreground">Ignoradas</p>
+                  </div>
+                  <div className="glass-card p-2 text-center">
+                    <p className="text-xl font-bold text-destructive">{errorCount}</p>
+                    <p className="text-xs text-muted-foreground">Erros</p>
                   </div>
                 </div>
+
+                {/* Income/Expense breakdown */}
+                {validCount > 0 && (
+                  <div className="flex items-center gap-4 text-sm">
+                    <div className="flex items-center gap-1 text-green-600">
+                      <ArrowUpCircle className="w-4 h-4" />
+                      <span>{incomeCount} receitas</span>
+                    </div>
+                    <div className="flex items-center gap-1 text-red-500">
+                      <ArrowDownCircle className="w-4 h-4" />
+                      <span>{expenseCount} despesas</span>
+                    </div>
+                  </div>
+                )}
 
                 <div className="flex items-center gap-2">
                   <Checkbox 
@@ -446,65 +472,136 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                   </label>
                 </div>
 
-                {/* Preview table */}
-                <div className="glass-card p-2 max-h-[300px] overflow-y-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-[50px]">Linha</TableHead>
-                        <TableHead>Descrição</TableHead>
-                        <TableHead className="text-right">Valor</TableHead>
-                        <TableHead>Data</TableHead>
-                        <TableHead>Status</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {parsedRows.slice(0, 20).map((row) => (
-                        <TableRow key={row.rowIndex} className={row.parsed ? "" : "bg-destructive/10"}>
-                          <TableCell className="text-xs text-muted-foreground">{row.rowIndex}</TableCell>
-                          <TableCell className="text-sm truncate max-w-[150px]">
-                            {row.parsed?.description || <span className="text-destructive text-xs">{row.errors[0]}</span>}
-                          </TableCell>
-                          <TableCell className="text-right text-sm">
-                            {row.parsed ? `R$ ${Math.abs(row.parsed.amount).toFixed(2)}` : "-"}
-                          </TableCell>
-                          <TableCell className="text-sm">
-                            {row.parsed?.transaction_date || "-"}
-                          </TableCell>
-                          <TableCell>
-                            {row.parsed ? (
-                              <Badge variant="default" className="text-xs">OK</Badge>
-                            ) : (
-                              <Badge variant="destructive" className="text-xs">Erro</Badge>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                  {parsedRows.length > 20 && (
-                    <p className="text-xs text-muted-foreground text-center mt-2">
-                      Mostrando 20 de {parsedRows.length} linhas
-                    </p>
-                  )}
-                </div>
+                {/* Tabs for OK / SKIPPED / ERROR */}
+                <Tabs defaultValue="ok" className="w-full">
+                  <TabsList className="w-full">
+                    <TabsTrigger value="ok" className="flex-1">
+                      OK ({validCount})
+                    </TabsTrigger>
+                    <TabsTrigger value="skipped" className="flex-1">
+                      Ignoradas ({skippedCount})
+                    </TabsTrigger>
+                    <TabsTrigger value="errors" className="flex-1">
+                      Erros ({errorCount})
+                    </TabsTrigger>
+                  </TabsList>
 
-                {/* Errors summary */}
-                {errorCount > 0 && (
-                  <div className="glass-card p-4 bg-destructive/10">
-                    <h4 className="font-semibold text-destructive mb-2">Linhas com erro ({errorCount})</h4>
-                    <ul className="text-xs text-muted-foreground space-y-1 max-h-[100px] overflow-y-auto">
-                      {parsedRows.filter(r => !r.parsed).slice(0, 10).map((row) => (
-                        <li key={row.rowIndex}>
-                          <strong>Linha {row.rowIndex}:</strong> {row.errors.join(", ")}
-                        </li>
-                      ))}
-                    </ul>
-                    {errorCount > 10 && (
-                      <p className="text-xs text-muted-foreground mt-2">E mais {errorCount - 10} erros...</p>
-                    )}
-                  </div>
-                )}
+                  <TabsContent value="ok" className="mt-2">
+                    <div className="glass-card p-2 max-h-[250px] overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-[40px]">#</TableHead>
+                            <TableHead>Descrição</TableHead>
+                            <TableHead className="text-right">Valor</TableHead>
+                            <TableHead>Tipo</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {parsedRows.filter(r => r.status === "OK").slice(0, 30).map((row) => (
+                            <TableRow key={row.rowIndex}>
+                              <TableCell className="text-xs text-muted-foreground">{row.rowIndex}</TableCell>
+                              <TableCell className="text-sm truncate max-w-[120px]">
+                                {row.parsed?.description}
+                              </TableCell>
+                              <TableCell className={`text-right text-sm font-medium ${row.parsed?.type === "INCOME" ? "text-green-600" : "text-red-500"}`}>
+                                {row.parsed?.type === "INCOME" ? "+" : "-"}R$ {Math.abs(row.parsed?.amount || 0).toFixed(2)}
+                              </TableCell>
+                              <TableCell>
+                                {row.parsed?.type === "INCOME" ? (
+                                  <Badge variant="outline" className="text-xs bg-green-500/10 text-green-600 border-green-500/30">
+                                    Receita
+                                  </Badge>
+                                ) : (
+                                  <Badge variant="outline" className="text-xs bg-red-500/10 text-red-500 border-red-500/30">
+                                    Despesa
+                                  </Badge>
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                      {parsedRows.filter(r => r.status === "OK").length > 30 && (
+                        <p className="text-xs text-muted-foreground text-center mt-2">
+                          Mostrando 30 de {parsedRows.filter(r => r.status === "OK").length} transações
+                        </p>
+                      )}
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="skipped" className="mt-2">
+                    <div className="glass-card p-2 max-h-[250px] overflow-y-auto">
+                      {skippedCount === 0 ? (
+                        <p className="text-sm text-muted-foreground text-center py-4">
+                          Nenhuma linha ignorada
+                        </p>
+                      ) : (
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="w-[40px]">#</TableHead>
+                              <TableHead>Conteúdo</TableHead>
+                              <TableHead>Motivo</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {parsedRows.filter(r => r.status === "SKIPPED").slice(0, 20).map((row) => (
+                              <TableRow key={row.rowIndex} className="bg-muted/30">
+                                <TableCell className="text-xs text-muted-foreground">{row.rowIndex}</TableCell>
+                                <TableCell className="text-sm truncate max-w-[150px] text-muted-foreground">
+                                  {row.raw.substring(0, 50)}...
+                                </TableCell>
+                                <TableCell>
+                                  <Badge variant="secondary" className="text-xs">
+                                    <MinusCircle className="w-3 h-3 mr-1" />
+                                    {row.reason || "Ignorada"}
+                                  </Badge>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      )}
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="errors" className="mt-2">
+                    <div className="glass-card p-2 max-h-[250px] overflow-y-auto">
+                      {errorCount === 0 ? (
+                        <p className="text-sm text-muted-foreground text-center py-4">
+                          Nenhum erro encontrado
+                        </p>
+                      ) : (
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="w-[40px]">#</TableHead>
+                              <TableHead>Conteúdo</TableHead>
+                              <TableHead>Erro</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {parsedRows.filter(r => r.status === "ERROR").slice(0, 20).map((row) => (
+                              <TableRow key={row.rowIndex} className="bg-destructive/10">
+                                <TableCell className="text-xs text-muted-foreground">{row.rowIndex}</TableCell>
+                                <TableCell className="text-sm truncate max-w-[150px]">
+                                  {row.raw.substring(0, 50)}...
+                                </TableCell>
+                                <TableCell>
+                                  <Badge variant="destructive" className="text-xs">
+                                    <AlertCircle className="w-3 h-3 mr-1" />
+                                    {row.reason || row.errors[0] || "Erro"}
+                                  </Badge>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      )}
+                    </div>
+                  </TabsContent>
+                </Tabs>
 
                 <div className="flex gap-3">
                   <Button variant="outline" onClick={() => setStep("mapping")} className="flex-1">
