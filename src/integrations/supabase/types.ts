@@ -160,6 +160,50 @@ export type Database = {
         }
         Relationships: []
       }
+      household_invites: {
+        Row: {
+          code: string
+          created_at: string
+          created_by: string
+          expires_at: string
+          household_id: string
+          id: string
+          is_active: boolean | null
+          max_uses: number | null
+          uses_count: number | null
+        }
+        Insert: {
+          code: string
+          created_at?: string
+          created_by: string
+          expires_at?: string
+          household_id: string
+          id?: string
+          is_active?: boolean | null
+          max_uses?: number | null
+          uses_count?: number | null
+        }
+        Update: {
+          code?: string
+          created_at?: string
+          created_by?: string
+          expires_at?: string
+          household_id?: string
+          id?: string
+          is_active?: boolean | null
+          max_uses?: number | null
+          uses_count?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "household_invites_household_id_fkey"
+            columns: ["household_id"]
+            isOneToOne: false
+            referencedRelation: "households"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       household_members: {
         Row: {
           created_at: string
@@ -416,6 +460,7 @@ export type Database = {
         Args: { _household_id: string }
         Returns: number
       }
+      generate_invite_code: { Args: never; Returns: string }
       get_household_plan: {
         Args: { _household_id: string }
         Returns: Database["public"]["Enums"]["plan_type"]
@@ -428,6 +473,7 @@ export type Database = {
         Args: { _household_id: string; _user_id: string }
         Returns: boolean
       }
+      join_household_by_code: { Args: { _code: string }; Returns: Json }
     }
     Enums: {
       household_role: "owner" | "admin" | "member"

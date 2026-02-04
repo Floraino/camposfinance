@@ -3,14 +3,16 @@ import { useNavigate } from "react-router-dom";
 import { useHousehold } from "@/hooks/useHousehold";
 import { Button } from "@/components/ui/button";
 import { PlanBadge } from "@/components/paywall/PlanBadge";
-import { Home, Plus, ChevronRight, Users, Loader2 } from "lucide-react";
+import { Home, Plus, ChevronRight, Users, Loader2, UserPlus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { JoinHouseholdSheet } from "@/components/household/JoinHouseholdSheet";
 
 export default function HouseholdSelection() {
   const { households, switchHousehold, createNewHousehold, isLoading } = useHousehold();
   const [isCreating, setIsCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [showJoinSheet, setShowJoinSheet] = useState(false);
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -137,15 +139,29 @@ export default function HouseholdSelection() {
               </div>
             </form>
           ) : (
-            <Button
-              variant="outline"
-              size="lg"
-              className="w-full mt-4"
-              onClick={() => setShowCreateForm(true)}
-            >
-              <Plus className="w-5 h-5 mr-2" />
-              Criar Nova Família
-            </Button>
+            <div className="space-y-3 mt-4">
+              {/* Join existing family button */}
+              <Button
+                variant="default"
+                size="lg"
+                className="w-full"
+                onClick={() => setShowJoinSheet(true)}
+              >
+                <UserPlus className="w-5 h-5 mr-2" />
+                Entrar em uma Família
+              </Button>
+              
+              {/* Create new family button */}
+              <Button
+                variant="outline"
+                size="lg"
+                className="w-full"
+                onClick={() => setShowCreateForm(true)}
+              >
+                <Plus className="w-5 h-5 mr-2" />
+                Criar Nova Família
+              </Button>
+            </div>
           )}
         </div>
       </div>
@@ -154,6 +170,12 @@ export default function HouseholdSelection() {
       <p className="text-center text-xs text-muted-foreground pb-safe py-4 px-6">
         Cada família possui seu próprio plano e dados financeiros
       </p>
+
+      {/* Join Household Sheet */}
+      <JoinHouseholdSheet 
+        open={showJoinSheet} 
+        onClose={() => setShowJoinSheet(false)} 
+      />
     </div>
   );
 }

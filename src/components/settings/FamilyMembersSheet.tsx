@@ -1,9 +1,11 @@
 import { useState, useEffect } from "react";
-import { X, Plus, Trash2, Loader2, User, Crown } from "lucide-react";
+import { X, Plus, Trash2, Loader2, User, Crown, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
+import { useHousehold } from "@/hooks/useHousehold";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { InviteCodeSheet } from "@/components/household/InviteCodeSheet";
 
 interface FamilyMember {
   id: string;
@@ -20,11 +22,13 @@ interface FamilyMembersSheetProps {
 
 export function FamilyMembersSheet({ open, onClose }: FamilyMembersSheetProps) {
   const { user, profile } = useAuth();
+  const { isAdmin } = useHousehold();
   const { toast } = useToast();
   const [members, setMembers] = useState<FamilyMember[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
+  const [showInviteSheet, setShowInviteSheet] = useState(false);
   const [newMemberName, setNewMemberName] = useState("");
   const [newMemberEmail, setNewMemberEmail] = useState("");
 
@@ -253,17 +257,37 @@ export function FamilyMembersSheet({ open, onClose }: FamilyMembersSheetProps) {
               </div>
             </div>
           ) : (
-            <Button 
-              variant="outline" 
-              className="w-full"
-              onClick={() => setShowAddForm(true)}
-            >
-              <Plus className="w-4 h-4 mr-2" />
-              Adicionar Membro
-            </Button>
+            <div className="space-y-3">
+              {/* Invite via code button (admin only) */}
+              {isAdmin && (
+                <Button 
+                  variant="default" 
+                  className="w-full"
+                  onClick={() => setShowInviteSheet(true)}
+                >
+                  <UserPlus className="w-4 h-4 mr-2" />
+                  Convidar via Código
+                </Button>
+              )}
+              
+              <Button 
+                variant="outline" 
+                className="w-full"
+                onClick={() => setShowAddForm(true)}
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                Adicionar Membro Manual
+              </Button>
+            </div>
           )}
         </div>
       </div>
+
+      {/* Invite Code Sheet */}
+      <InviteCodeSheet 
+        open={showInviteSheet} 
+        onClose={() => setShowInviteSheet(false)} 
+      />
     </div>
   );
 }
