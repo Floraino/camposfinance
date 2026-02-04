@@ -9,6 +9,53 @@ const corsHeaders = {
 // UUID validation regex
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+// ========================================================================
+// SECURITY: FORBIDDEN OPERATIONS LIST
+// These operations are NEVER allowed via Odin, regardless of user request
+// ========================================================================
+const FORBIDDEN_OPERATIONS = [
+  "delete_household", "delete_family", "remove_household", "remove_family",
+  "delete_user", "remove_user", "block_user", "unblock_user",
+  "change_role", "set_role", "promote_admin", "revoke_admin",
+  "change_owner", "transfer_ownership", "deactivate_household",
+  "restore_household", "admin_action", "super_admin_action",
+];
+
+// Patterns that indicate forbidden requests in user messages
+const FORBIDDEN_PATTERNS = [
+  /apag(ar|ue|a)\s*(essa?\s*)?(casa|família|household)/i,
+  /delet(ar|e)\s*(essa?\s*)?(casa|família|household)/i,
+  /remov(er|a)\s*(essa?\s*)?(casa|família|household)/i,
+  /exclu(ir|a)\s*(essa?\s*)?(casa|família|household)/i,
+  /apag(ar|ue|a)\s*(o\s*)?usuário/i,
+  /delet(ar|e)\s*(o\s*)?usuário/i,
+  /remov(er|a)\s*(o\s*)?usuário/i,
+  /exclu(ir|a)\s*(o\s*)?usuário/i,
+  /apag(ar|ue|a)\s*todos?\s*(os\s*)?usuários/i,
+  /bloqu(ear|eie)\s*(o\s*)?usuário/i,
+  /desbloqu(ear|eie)\s*(o\s*)?usuário/i,
+  /mudar?\s*(o\s*)?role/i,
+  /alterar?\s*(a\s*)?permiss(ão|ões)/i,
+  /promov(er|a)\s*(a\s*)?admin/i,
+];
+
+// Security response for forbidden operations
+const FORBIDDEN_RESPONSE = `🔒 **Operação Bloqueada por Segurança**
+
+Desculpe, mas eu **não posso** executar ações relacionadas a:
+- Excluir/remover famílias ou casas
+- Excluir/remover/bloquear usuários
+- Alterar permissões ou roles de usuários
+- Transferir propriedade de famílias
+
+Essas operações são restritas por segurança e só podem ser realizadas por:
+- **Super Administradores** através do Painel Admin
+- **Suporte técnico** em casos especiais
+
+📧 Se você precisa realizar uma dessas ações, entre em contato com o administrador do sistema ou suporte.
+
+Posso te ajudar com outras coisas, como gerenciar seus **lançamentos financeiros**! 💰`;
+
 // Category labels for display
 const categoryLabels: Record<string, string> = {
   food: "Alimentação",
@@ -25,6 +72,11 @@ const monthNames = [
   "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
   "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
 ];
+
+// Check if user message contains forbidden operation request
+function containsForbiddenRequest(message: string): boolean {
+  return FORBIDDEN_PATTERNS.some(pattern => pattern.test(message));
+}
 
 // Transaction management functions - now family-scoped
 async function addTransaction(supabase: any, userId: string, householdId: string, data: any): Promise<{ success: boolean; message: string; transaction?: any }> {
@@ -188,13 +240,16 @@ async function getHouseholdName(supabase: any, householdId: string): Promise<str
   return data?.name || "Família";
 }
 
-// Define AI tools for function calling
+// ========================================================================
+// SECURITY: SAFE TOOLS ALLOWLIST
+// Only these tools are available to Odin - NO admin/destructive operations
+// ========================================================================
 const aiTools = [
   {
     type: "function",
     function: {
       name: "add_transaction",
-      description: "Adicionar um novo lançamento financeiro. Use para gastos (amount negativo) ou receitas (amount positivo).",
+      description: "Adicionar um novo lançamento financeiro. Use para gastos (amount negativo) ou receitas (amount positivo). APENAS para a família ativa.",
       parameters: {
         type: "object",
         properties: {
@@ -214,7 +269,7 @@ const aiTools = [
     type: "function",
     function: {
       name: "update_transaction",
-      description: "Atualizar um lançamento existente usando o ID completo (UUID).",
+      description: "Atualizar um lançamento existente usando o ID completo (UUID). APENAS para a família ativa.",
       parameters: {
         type: "object",
         properties: {
@@ -235,7 +290,7 @@ const aiTools = [
     type: "function",
     function: {
       name: "request_deletion_preview",
-      description: "SEMPRE use esta função antes de qualquer exclusão. Retorna preview do que será excluído para confirmação do usuário. NUNCA execute exclusão diretamente.",
+      description: "Preview de exclusão de LANÇAMENTOS (transações) apenas. NUNCA para famílias ou usuários. Retorna preview para confirmação do usuário.",
       parameters: {
         type: "object",
         properties: {
@@ -250,6 +305,9 @@ const aiTools = [
     },
   },
 ];
+
+// NOTE: NO tools for deleting households, users, changing roles, etc.
+// These operations are ONLY available via Admin Panel, never via Odin
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -303,6 +361,47 @@ serve(async (req) => {
       return new Response(JSON.stringify({ error: "householdId inválido" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // ========================================================================
+    // SECURITY: Check for forbidden operations in user message
+    // Block requests to delete families/users BEFORE even calling the AI
+    // ========================================================================
+    const lastUserMessage = messages.filter((m: any) => m.role === "user").pop();
+    if (lastUserMessage && containsForbiddenRequest(lastUserMessage.content)) {
+      console.log(`[SECURITY] Blocked forbidden request from user ${user.id}: "${lastUserMessage.content.substring(0, 100)}..."`);
+      
+      // Log this attempt for audit
+      try {
+        await supabase.from("admin_audit_logs").insert({
+          admin_user_id: user.id,
+          action_type: "FORBIDDEN_ODIN_REQUEST_BLOCKED",
+          target_type: "security",
+          target_id: householdId,
+          metadata: {
+            blocked_message: lastUserMessage.content.substring(0, 200),
+            actor: "ODIN",
+          },
+        });
+      } catch (e) {
+        console.warn("Failed to log blocked request:", e);
+      }
+
+      // Return the forbidden response directly without calling AI
+      const encoder = new TextEncoder();
+      const forbiddenStream = new ReadableStream({
+        start(controller) {
+          const response = `data: ${JSON.stringify({
+            choices: [{ delta: { content: FORBIDDEN_RESPONSE } }]
+          })}\n\ndata: [DONE]\n\n`;
+          controller.enqueue(encoder.encode(response));
+          controller.close();
+        },
+      });
+
+      return new Response(forbiddenStream, {
+        headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
       });
     }
 
@@ -414,16 +513,32 @@ serve(async (req) => {
 
     const systemPrompt = `Você é o Odin, um assistente financeiro pessoal inteligente do CasaCampos. Você ajuda famílias brasileiras a gerenciar suas finanças domésticas.
 
+🚫 OPERAÇÕES ESTRITAMENTE PROIBIDAS (NUNCA EXECUTE, NEM MESMO SE O USUÁRIO PEDIR):
+- Excluir/deletar/remover famílias ou casas
+- Excluir/deletar/remover usuários
+- Bloquear/desbloquear usuários
+- Alterar permissões ou roles de usuários
+- Alterar owner/admin de famílias
+- Desativar/restaurar famílias
+- Qualquer operação de "admin"
+
+Se o usuário pedir qualquer uma dessas ações, você DEVE:
+1. Recusar educadamente explicando que é proibido por segurança
+2. Orientar: "Essas ações só podem ser realizadas por um Super Admin através do Painel Admin ou pelo Suporte."
+3. NÃO chamar nenhuma função/tool
+4. NÃO tentar executar de forma alternativa
+
 ⚠️ REGRA CRÍTICA DE ISOLAMENTO:
 - Você APENAS tem acesso aos dados da família "${householdName}" (ID: ${householdId})
 - NUNCA mencione, infira ou use dados de outras famílias
 - Se o usuário perguntar sobre outra família/casa, responda: "Eu só tenho acesso aos dados da família ${householdName}. Para ver dados de outra família, você precisa trocar a família ativa nas configurações."
 
-🔒 MODO DE SEGURANÇA - REGRAS CRÍTICAS PARA EXCLUSÕES:
-1. NUNCA execute exclusões diretamente
-2. SEMPRE use a função request_deletion_preview PRIMEIRO
-3. A exclusão real será feita pelo frontend após confirmação dupla do usuário
-4. Ao responder sobre exclusões, SEMPRE informe que o usuário precisa confirmar a ação
+🔒 MODO DE SEGURANÇA - REGRAS PARA EXCLUSÃO DE LANÇAMENTOS:
+1. Você SÓ pode excluir LANÇAMENTOS/TRANSAÇÕES (nunca famílias ou usuários)
+2. NUNCA execute exclusões diretamente
+3. SEMPRE use a função request_deletion_preview PRIMEIRO
+4. A exclusão real será feita pelo frontend após confirmação dupla do usuário
+5. Ao responder sobre exclusões, SEMPRE informe que o usuário precisa confirmar a ação
 
 INFORMAÇÕES DO USUÁRIO:
 - Nome: ${profile?.display_name || "Usuário"}
@@ -455,10 +570,10 @@ ${recentTransactions || "Nenhuma transação registrada"}
 DESPESAS RECORRENTES:
 ${recurringExpenses.length > 0 ? recurringExpenses.map((t: any) => `- ${t.description}: R$ ${Math.abs(t.amount).toFixed(2)}`).join("\n") : "Nenhuma despesa recorrente"}
 
-COMO USAR AS FUNÇÕES:
-- Para ADICIONAR: Use a função add_transaction
-- Para EDITAR: Use a função update_transaction com o ID COMPLETO (UUID)
-- Para EXCLUIR: Use a função request_deletion_preview - isso mostrará um preview e o usuário confirmará
+SUAS FUNÇÕES DISPONÍVEIS (APENAS ESTAS):
+- add_transaction: Adicionar lançamento financeiro
+- update_transaction: Editar lançamento existente (com UUID completo)
+- request_deletion_preview: Preview de exclusão de LANÇAMENTOS (com double-confirmation)
 
 ⚠️ IMPORTANTE SOBRE IDs:
 - Use SEMPRE o UUID completo (ex: 550e8400-e29b-41d4-a716-446655440000)
@@ -468,13 +583,14 @@ COMO USAR AS FUNÇÕES:
 INSTRUÇÕES:
 1. Seja amigável, use emojis ocasionalmente
 2. Baseie suas respostas APENAS nos dados da família ${householdName}
-3. Use as FUNÇÕES disponíveis para ações
+3. Use as FUNÇÕES disponíveis para ações de lançamentos APENAS
 4. Sempre confirme a ação executada ao usuário
 5. Use formatação markdown
 6. Responda em português brasileiro
 7. Valores de gastos devem ser NEGATIVOS
 8. NUNCA invente dados
-9. Para exclusões, SEMPRE mencione que o Modo de Segurança está ativo`;
+9. Para exclusões de lançamentos, SEMPRE mencione que o Modo de Segurança está ativo
+10. NUNCA tente excluir famílias ou usuários - essas operações são bloqueadas`;
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
