@@ -12,6 +12,7 @@ import Dashboard from "./pages/Dashboard";
 import Transactions from "./pages/Transactions";
 import AddTransaction from "./pages/AddTransaction";
 import Assistant from "./pages/Assistant";
+import PendingItems from "./pages/PendingItems";
 import Settings from "./pages/Settings";
 import Auth from "./pages/Auth";
 import HouseholdSelection from "./pages/HouseholdSelection";
@@ -177,6 +178,14 @@ const AppRoutes = () => (
       element={
         <ProtectedRoute>
           <Assistant />
+        </ProtectedRoute>
+      }
+    />
+    <Route
+      path="/pending"
+      element={
+        <ProtectedRoute>
+          <PendingItems />
         </ProtectedRoute>
       }
     />
