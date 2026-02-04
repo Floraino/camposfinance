@@ -3,22 +3,49 @@ import { useNavigate } from "react-router-dom";
 import { useHousehold } from "@/hooks/useHousehold";
 import { Button } from "@/components/ui/button";
 import { PlanBadge } from "@/components/paywall/PlanBadge";
-import { Home, Plus, ChevronRight, Users, Loader2, UserPlus } from "lucide-react";
+import { Home, Plus, ChevronRight, Users, Loader2, UserPlus, RefreshCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { JoinHouseholdSheet } from "@/components/household/JoinHouseholdSheet";
 
 export default function HouseholdSelection() {
-  const { households, switchHousehold, createNewHousehold, isLoading } = useHousehold();
+  const { households, switchHousehold, createNewHousehold, isLoading, refreshHouseholds } = useHousehold();
   const [isCreating, setIsCreating] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [newName, setNewName] = useState("");
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [showJoinSheet, setShowJoinSheet] = useState(false);
   const navigate = useNavigate();
   const { toast } = useToast();
 
+  // Always refresh households when this page mounts to ensure fresh data
+  useEffect(() => {
+    const fetchFreshHouseholds = async () => {
+      setIsRefreshing(true);
+      try {
+        await refreshHouseholds();
+      } finally {
+        setIsRefreshing(false);
+      }
+    };
+    fetchFreshHouseholds();
+  }, [refreshHouseholds]);
+
   const handleSelectHousehold = (household: typeof households[0]) => {
     switchHousehold(household);
     navigate("/");
+  };
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await refreshHouseholds();
+      toast({
+        title: "Lista atualizada",
+        description: "Suas famílias foram atualizadas.",
+      });
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   const handleCreateHousehold = async (e: React.FormEvent) => {
@@ -59,8 +86,17 @@ export default function HouseholdSelection() {
     <div className="min-h-screen bg-background flex flex-col">
       {/* Header */}
       <div className="flex-1 flex flex-col px-6 py-12">
-        {/* Logo */}
-        <div className="mb-8 text-center">
+        {/* Logo and Refresh */}
+        <div className="mb-8 text-center relative">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="absolute right-0 top-0"
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+          >
+            <RefreshCw className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`} />
+          </Button>
           <div className="w-16 h-16 rounded-2xl bg-accent/20 flex items-center justify-center mx-auto mb-4">
             <Users className="w-8 h-8 text-accent" />
           </div>
@@ -71,6 +107,13 @@ export default function HouseholdSelection() {
             Escolha qual família você deseja gerenciar
           </p>
         </div>
+
+        {/* Loading indicator when refreshing */}
+        {isRefreshing && (
+          <div className="flex justify-center mb-4">
+            <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+          </div>
+        )}
 
         {/* Households List */}
         <div className="space-y-3 flex-1">

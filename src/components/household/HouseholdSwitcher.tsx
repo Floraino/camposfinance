@@ -10,7 +10,7 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
-import { Home, ChevronRight, Plus, Check } from "lucide-react";
+import { Home, ChevronRight, Plus, Check, Loader2, RefreshCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface HouseholdSwitcherProps {
@@ -18,13 +18,29 @@ interface HouseholdSwitcherProps {
 }
 
 export function HouseholdSwitcher({ children }: HouseholdSwitcherProps) {
-  const { households, currentHousehold, switchHousehold, createNewHousehold } = useHousehold();
+  const { households, currentHousehold, switchHousehold, createNewHousehold, refreshHouseholds } = useHousehold();
   const [open, setOpen] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newName, setNewName] = useState("");
   const [isCreating, setIsCreating] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const navigate = useNavigate();
   const { toast } = useToast();
+
+  // Refresh households when sheet opens to get fresh data
+  useEffect(() => {
+    if (open) {
+      const fetchFresh = async () => {
+        setIsRefreshing(true);
+        try {
+          await refreshHouseholds();
+        } finally {
+          setIsRefreshing(false);
+        }
+      };
+      fetchFresh();
+    }
+  }, [open, refreshHouseholds]);
 
   const handleSelect = (household: typeof households[0]) => {
     switchHousehold(household);
@@ -33,6 +49,15 @@ export function HouseholdSwitcher({ children }: HouseholdSwitcherProps) {
       title: "Família alterada",
       description: `Agora você está em "${household.name}"`,
     });
+  };
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await refreshHouseholds();
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   const handleCreate = async (e: React.FormEvent) => {
@@ -68,10 +93,32 @@ export function HouseholdSwitcher({ children }: HouseholdSwitcherProps) {
       </SheetTrigger>
       <SheetContent side="bottom" className="h-[70vh] rounded-t-3xl">
         <SheetHeader className="mb-4">
-          <SheetTitle>Trocar Família</SheetTitle>
+          <div className="flex items-center justify-between">
+            <SheetTitle>Trocar Família</SheetTitle>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+            >
+              <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+            </Button>
+          </div>
         </SheetHeader>
 
+        {isRefreshing && (
+          <div className="flex justify-center mb-4">
+            <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+          </div>
+        )}
+
         <div className="space-y-3 overflow-y-auto max-h-[calc(70vh-120px)]">
+          {households.length === 0 && !isRefreshing && (
+            <p className="text-center text-muted-foreground py-4">
+              Nenhuma família encontrada
+            </p>
+          )}
+          
           {households.map((household) => (
             <button
               key={household.id}

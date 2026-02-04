@@ -1,17 +1,20 @@
-import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from "react";
+import { createContext, useContext, useEffect, useState, ReactNode, useCallback, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "./useAuth";
 import {
   getUserHouseholds,
   getHouseholdPlan,
   createHousehold,
   getUserRole,
+  getHousehold,
   type Household,
   type HouseholdPlan,
   type HouseholdRole,
   type PlanType,
 } from "@/services/householdService";
 import { getPlanFeatures, type PlanFeatures } from "@/services/planService";
+import { useToast } from "@/hooks/use-toast";
 
 interface HouseholdContextType {
   // Current household
@@ -58,6 +61,7 @@ const STORAGE_KEY = "currentHouseholdId";
 export function HouseholdProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   
   const [households, setHouseholds] = useState<Household[]>([]);
   const [currentHousehold, setCurrentHouseholdState] = useState<Household | null>(null);
@@ -65,6 +69,9 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
   const [userRole, setUserRole] = useState<HouseholdRole | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasSelectedHousehold, setHasSelectedHousehold] = useState(false);
+  
+  // Track if we've shown the "removed" toast to avoid duplicates
+  const hasShownRemovedToast = useRef(false);
 
   // Derived state
   const planType: PlanType = plan?.plan || "BASIC";
@@ -81,6 +88,7 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
 
   const setCurrentHousehold = useCallback((household: Household | null) => {
     setCurrentHouseholdState(household);
+    hasShownRemovedToast.current = false; // Reset toast flag when switching
     if (household) {
       localStorage.setItem(STORAGE_KEY, household.id);
       setHasSelectedHousehold(true);
@@ -98,10 +106,25 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
     setUserRole(null);
   }, []);
 
+  // Handle deleted household - show toast and clear selection
+  const handleHouseholdDeleted = useCallback(() => {
+    if (!hasShownRemovedToast.current) {
+      hasShownRemovedToast.current = true;
+      toast({
+        title: "Família removida",
+        description: "Esta família foi excluída. Por favor, selecione outra.",
+        variant: "destructive",
+      });
+    }
+    clearHousehold();
+    queryClient.clear();
+  }, [clearHousehold, queryClient, toast]);
+
   const refreshHouseholds = useCallback(async () => {
     if (!user) return;
     
     try {
+      // Always fetch fresh data from backend
       const userHouseholds = await getUserHouseholds();
       setHouseholds(userHouseholds);
       
@@ -113,17 +136,17 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
           setCurrentHouseholdState(savedHousehold);
           setHasSelectedHousehold(true);
         } else {
-          // Saved household no longer exists, clear it
-          localStorage.removeItem(STORAGE_KEY);
-          setHasSelectedHousehold(false);
+          // Saved household no longer exists (deleted), clear it
+          handleHouseholdDeleted();
         }
       }
     } catch (error) {
       console.error("Error loading households:", error);
     }
-  }, [user]);
+  }, [user, handleHouseholdDeleted]);
 
   // Load plan and role when current household changes
+  // Also verify the household still exists
   useEffect(() => {
     async function loadHouseholdData() {
       if (!currentHousehold) {
@@ -133,20 +156,38 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
       }
 
       try {
+        // First verify the household still exists
+        const householdExists = await getHousehold(currentHousehold.id);
+        
+        if (!householdExists) {
+          // Household was deleted, handle gracefully
+          handleHouseholdDeleted();
+          return;
+        }
+
         const [householdPlan, role] = await Promise.all([
           getHouseholdPlan(currentHousehold.id),
           getUserRole(currentHousehold.id),
         ]);
         
+        // If user is no longer a member (role is null), they were removed
+        if (!role) {
+          handleHouseholdDeleted();
+          return;
+        }
+        
         setPlan(householdPlan);
         setUserRole(role);
       } catch (error) {
         console.error("Error loading household data:", error);
+        // If we get an error fetching household data, it might be deleted
+        // Refresh households to check
+        refreshHouseholds();
       }
     }
 
     loadHouseholdData();
-  }, [currentHousehold]);
+  }, [currentHousehold, handleHouseholdDeleted, refreshHouseholds]);
 
   // Initial load
   useEffect(() => {
