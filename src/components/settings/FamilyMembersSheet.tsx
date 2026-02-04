@@ -1,11 +1,12 @@
 import { useState, useEffect } from "react";
-import { X, Plus, Trash2, Loader2, User, Crown, UserPlus } from "lucide-react";
+import { X, Plus, Trash2, Loader2, User, Crown, UserPlus, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import { useHousehold } from "@/hooks/useHousehold";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { InviteCodeSheet } from "@/components/household/InviteCodeSheet";
+import { PendingRequestsSheet } from "@/components/household/PendingRequestsSheet";
 
 interface FamilyMember {
   id: string;
@@ -22,13 +23,15 @@ interface FamilyMembersSheetProps {
 
 export function FamilyMembersSheet({ open, onClose }: FamilyMembersSheetProps) {
   const { user, profile } = useAuth();
-  const { isAdmin } = useHousehold();
+  const { isAdmin, currentHousehold } = useHousehold();
   const { toast } = useToast();
   const [members, setMembers] = useState<FamilyMember[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
   const [showInviteSheet, setShowInviteSheet] = useState(false);
+  const [showPendingRequests, setShowPendingRequests] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
   const [newMemberName, setNewMemberName] = useState("");
   const [newMemberEmail, setNewMemberEmail] = useState("");
 
@@ -37,6 +40,30 @@ export function FamilyMembersSheet({ open, onClose }: FamilyMembersSheetProps) {
       loadMembers();
     }
   }, [open, user]);
+
+  // Load pending requests count for admins
+  useEffect(() => {
+    if (open && isAdmin && currentHousehold) {
+      loadPendingCount();
+    }
+  }, [open, isAdmin, currentHousehold]);
+
+  const loadPendingCount = async () => {
+    if (!currentHousehold) return;
+    try {
+      const { count, error } = await supabase
+        .from("household_join_requests")
+        .select("*", { count: "exact", head: true })
+        .eq("household_id", currentHousehold.id)
+        .eq("status", "pending");
+
+      if (!error && count !== null) {
+        setPendingCount(count);
+      }
+    } catch (err) {
+      console.error("Error loading pending count:", err);
+    }
+  };
 
   const loadMembers = async () => {
     if (!user) return;
@@ -269,6 +296,21 @@ export function FamilyMembersSheet({ open, onClose }: FamilyMembersSheetProps) {
                   Convidar via Código
                 </Button>
               )}
+
+              {/* Pending Requests Button (admin only) */}
+              {isAdmin && pendingCount > 0 && (
+                <Button 
+                  variant="default" 
+                  className="w-full relative"
+                  onClick={() => setShowPendingRequests(true)}
+                >
+                  <Clock className="w-4 h-4 mr-2" />
+                  Solicitações Pendentes
+                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-destructive text-destructive-foreground text-xs rounded-full flex items-center justify-center">
+                    {pendingCount}
+                  </span>
+                </Button>
+              )}
               
               <Button 
                 variant="outline" 
@@ -287,6 +329,15 @@ export function FamilyMembersSheet({ open, onClose }: FamilyMembersSheetProps) {
       <InviteCodeSheet 
         open={showInviteSheet} 
         onClose={() => setShowInviteSheet(false)} 
+      />
+
+      {/* Pending Requests Sheet */}
+      <PendingRequestsSheet 
+        open={showPendingRequests} 
+        onClose={() => {
+          setShowPendingRequests(false);
+          loadPendingCount(); // Refresh count after closing
+        }} 
       />
     </div>
   );
