@@ -1,10 +1,12 @@
 import { useState, useRef } from "react";
-import { Camera, Upload, X, Loader2, ScanLine } from "lucide-react";
+import { Camera, Upload, X, Loader2, ScanLine, Crown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { useHousehold } from "@/hooks/useHousehold";
 import { ReceiptReviewSheet, type ExtractedReceipt } from "./ReceiptReviewSheet";
+import { UpgradeModal } from "@/components/paywall/UpgradeModal";
 
 interface ReceiptScannerProps {
   isOpen: boolean;
@@ -17,11 +19,19 @@ export function ReceiptScanner({ isOpen, onClose, onTransactionAdded }: ReceiptS
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [extractedData, setExtractedData] = useState<ExtractedReceipt | null>(null);
   const [showReview, setShowReview] = useState(false);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
+  const { canUseOCR, planType } = useHousehold();
 
   const handleFileSelect = async (file: File) => {
+    // Check if OCR is allowed (PRO only)
+    if (!canUseOCR) {
+      setShowUpgradeModal(true);
+      return;
+    }
+
     if (!file.type.startsWith("image/")) {
       toast({
         title: "Arquivo inválido",
@@ -164,35 +174,54 @@ export function ReceiptScanner({ isOpen, onClose, onTransactionAdded }: ReceiptS
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center gap-6">
                 <div className="text-center mb-4">
-                  <div className="w-24 h-24 bg-accent/10 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <div className="w-24 h-24 bg-accent/10 rounded-full flex items-center justify-center mx-auto mb-4 relative">
                     <ScanLine className="w-12 h-12 text-accent" />
+                    {!canUseOCR && (
+                      <div className="absolute -top-1 -right-1 w-7 h-7 bg-amber-500 rounded-full flex items-center justify-center">
+                        <Crown className="w-4 h-4 text-white" />
+                      </div>
+                    )}
                   </div>
                   <h3 className="text-lg font-semibold text-foreground mb-2">
                     Leitura Automática
+                    {!canUseOCR && <span className="ml-2 text-xs text-amber-500 font-normal">PRO</span>}
                   </h3>
                   <p className="text-sm text-muted-foreground max-w-xs">
-                    Tire uma foto ou selecione uma imagem do cupom fiscal para extrair os dados automaticamente
+                    {canUseOCR 
+                      ? "Tire uma foto ou selecione uma imagem do cupom fiscal para extrair os dados automaticamente"
+                      : "Essa funcionalidade é do plano Pro da família. Atualize para usar o OCR automático."
+                    }
                   </p>
                 </div>
 
                 <div className="flex gap-4 w-full max-w-xs">
                   <Button
                     variant="outline"
-                    className="flex-1 h-24 flex-col gap-2"
-                    onClick={() => cameraInputRef.current?.click()}
+                    className={`flex-1 h-24 flex-col gap-2 ${!canUseOCR ? 'opacity-60' : ''}`}
+                    onClick={() => canUseOCR ? cameraInputRef.current?.click() : setShowUpgradeModal(true)}
                   >
                     <Camera className="w-6 h-6" />
                     <span className="text-xs">Câmera</span>
                   </Button>
                   <Button
                     variant="outline"
-                    className="flex-1 h-24 flex-col gap-2"
-                    onClick={() => fileInputRef.current?.click()}
+                    className={`flex-1 h-24 flex-col gap-2 ${!canUseOCR ? 'opacity-60' : ''}`}
+                    onClick={() => canUseOCR ? fileInputRef.current?.click() : setShowUpgradeModal(true)}
                   >
                     <Upload className="w-6 h-6" />
                     <span className="text-xs">Galeria</span>
                   </Button>
                 </div>
+
+                {!canUseOCR && (
+                  <Button 
+                    className="w-full max-w-xs bg-gradient-to-r from-amber-500 to-orange-500 text-white"
+                    onClick={() => setShowUpgradeModal(true)}
+                  >
+                    <Crown className="w-4 h-4 mr-2" />
+                    Ativar Pro para a Família
+                  </Button>
+                )}
 
                 <input
                   ref={cameraInputRef}
@@ -214,7 +243,10 @@ export function ReceiptScanner({ isOpen, onClose, onTransactionAdded }: ReceiptS
 
             <div className="pt-4 border-t border-border">
               <p className="text-xs text-muted-foreground text-center">
-                Suporta cupom fiscal, nota fiscal e comprovantes PIX/cartão
+                {canUseOCR 
+                  ? "Suporta cupom fiscal, nota fiscal e comprovantes PIX/cartão"
+                  : "Família no plano Basic - OCR desabilitado"
+                }
               </p>
             </div>
           </div>
@@ -229,6 +261,12 @@ export function ReceiptScanner({ isOpen, onClose, onTransactionAdded }: ReceiptS
           onSave={handleTransactionSaved}
         />
       )}
+
+      <UpgradeModal
+        isOpen={showUpgradeModal}
+        onClose={() => setShowUpgradeModal(false)}
+        feature="ocr"
+      />
     </>
   );
 }
