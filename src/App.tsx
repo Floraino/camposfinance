@@ -7,6 +7,7 @@ import { AuthProvider, useAuth } from "@/hooks/useAuth";
 import { HouseholdProvider, useHousehold } from "@/hooks/useHousehold";
 import { AdminProvider, useAdmin } from "@/hooks/useAdmin";
 import { ThemeProvider } from "@/components/providers/ThemeProvider";
+import { AppShell } from "@/components/layout/AppShell";
 import Dashboard from "./pages/Dashboard";
 import Transactions from "./pages/Transactions";
 import AddTransaction from "./pages/AddTransaction";
@@ -23,6 +24,8 @@ import AdminUsers from "./pages/admin/AdminUsers";
 import AdminCoupons from "./pages/admin/AdminCoupons";
 import AdminAudit from "./pages/admin/AdminAudit";
 import { Loader2 } from "lucide-react";
+import { isNativeApp } from "@/lib/platform";
+import { useEffect } from "react";
 
 const queryClient = new QueryClient();
 
@@ -112,8 +115,23 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+// Add native-app class to body when running on mobile
+function NativeAppDetector() {
+  useEffect(() => {
+    if (isNativeApp()) {
+      document.body.classList.add("native-app");
+    }
+    return () => {
+      document.body.classList.remove("native-app");
+    };
+  }, []);
+  return null;
+}
+
 const AppRoutes = () => (
-  <Routes>
+  <AppShell>
+    <NativeAppDetector />
+    <Routes>
     <Route
       path="/auth"
       element={
@@ -229,6 +247,7 @@ const AppRoutes = () => (
     />
     <Route path="*" element={<NotFound />} />
   </Routes>
+  </AppShell>
 );
 
 const App = () => (

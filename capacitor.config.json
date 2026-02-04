@@ -1,9 +1,39 @@
 {
-  "appId": "app.lovable.50885c5adf934e91a94afd5561fdfd52",
-  "appName": "camposfinance",
+  "appId": "com.camposfinance.app",
+  "appName": "Campos Finance",
   "webDir": "dist",
   "server": {
     "url": "https://50885c5a-df93-4e91-a94a-fd5561fdfd52.lovableproject.com?forceHideBadge=true",
     "cleartext": true
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "launchAutoHide": true,
+      "backgroundColor": "#1a1a1f",
+      "androidScaleType": "CENTER_CROP",
+      "showSpinner": false,
+      "splashFullScreen": true,
+      "splashImmersive": true
+    },
+    "StatusBar": {
+      "style": "Dark",
+      "backgroundColor": "#1a1a1f"
+    },
+    "Keyboard": {
+      "resize": "body",
+      "resizeOnFullScreen": true
+    },
+    "Camera": {
+      "presentationStyle": "fullscreen"
+    }
+  },
+  "android": {
+    "allowMixedContent": true,
+    "backgroundColor": "#1a1a1f"
+  },
+  "ios": {
+    "backgroundColor": "#1a1a1f",
+    "contentInset": "automatic"
   }
 }
