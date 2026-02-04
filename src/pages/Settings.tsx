@@ -8,7 +8,7 @@ import { useHousehold } from "@/hooks/useHousehold";
 import { useAdmin } from "@/hooks/useAdmin";
 import { useProFeature } from "@/hooks/useProFeature";
 import { useTheme } from "@/components/providers/ThemeProvider";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate, Link, useSearchParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { FamilyMembersSheet } from "@/components/settings/FamilyMembersSheet";
@@ -29,6 +29,7 @@ export default function Settings() {
   const { isSuperAdmin } = useAdmin();
   const { resolvedTheme, setTheme } = useTheme();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { toast } = useToast();
   
   // Use centralized PRO feature checks
@@ -53,6 +54,30 @@ export default function Settings() {
   const [darkMode, setDarkMode] = useState(resolvedTheme === "dark");
   const [notifications, setNotifications] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Handle subscription success/cancel from Stripe redirect
+  useEffect(() => {
+    const subscriptionResult = searchParams.get("subscription");
+    if (subscriptionResult === "success") {
+      toast({
+        title: "Assinatura ativada! 🎉",
+        description: "Sua família agora tem acesso ao plano PRO.",
+      });
+      // Clear the query param
+      searchParams.delete("subscription");
+      setSearchParams(searchParams);
+      // Refresh to get updated plan
+      window.location.reload();
+    } else if (subscriptionResult === "cancelled") {
+      toast({
+        title: "Pagamento cancelado",
+        description: "Você pode tentar novamente quando quiser.",
+        variant: "destructive",
+      });
+      searchParams.delete("subscription");
+      setSearchParams(searchParams);
+    }
+  }, [searchParams, setSearchParams, toast]);
 
   // Load preferences from database
   useEffect(() => {

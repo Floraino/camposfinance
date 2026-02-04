@@ -1,8 +1,11 @@
-import { X, Crown, ScanLine, Wallet, Brain, FileText, Check, Upload } from "lucide-react";
+import { useState } from "react";
+import { X, Crown, ScanLine, Wallet, Brain, FileText, Check, Upload, Loader2, CreditCard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useHousehold } from "@/hooks/useHousehold";
 import { PRO_PRICING, PLAN_COMPARISON } from "@/services/planService";
 import { type ProFeatureKey, PRO_FEATURES } from "@/lib/proFeatures";
+import { createCheckout, type PriceType } from "@/services/subscriptionService";
+import { useToast } from "@/hooks/use-toast";
 
 // Legacy feature type mapping for backward compatibility
 type LegacyFeature = "ocr" | "accounts" | "ai" | "export" | "csv";
@@ -35,6 +38,9 @@ const featureIcons = {
 
 export function UpgradeModal({ isOpen, onClose, feature = "ocr", onUpgrade, onContinueManually }: UpgradeModalProps) {
   const { isAdmin, currentHousehold } = useHousehold();
+  const { toast } = useToast();
+  const [isLoading, setIsLoading] = useState<PriceType | null>(null);
+  const [selectedPlan, setSelectedPlan] = useState<PriceType>("yearly");
   
   // Resolve feature key (handle both legacy and new format)
   const featureKey: ProFeatureKey = feature in legacyToProFeatureKey 
@@ -47,10 +53,41 @@ export function UpgradeModal({ isOpen, onClose, feature = "ocr", onUpgrade, onCo
 
   if (!isOpen) return null;
 
-  const handleUpgrade = () => {
-    // TODO: Integrate with Stripe
-    onUpgrade?.();
-    onClose();
+  const handleUpgrade = async (priceType: PriceType) => {
+    if (!currentHousehold?.id) {
+      toast({
+        title: "Erro",
+        description: "Selecione uma família primeiro",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsLoading(priceType);
+
+    try {
+      const checkoutUrl = await createCheckout(currentHousehold.id, priceType);
+      
+      // Open Stripe Checkout in new tab
+      window.open(checkoutUrl, "_blank");
+      
+      toast({
+        title: "Redirecionando...",
+        description: "Uma nova aba foi aberta para completar o pagamento",
+      });
+      
+      onUpgrade?.();
+      onClose();
+    } catch (error) {
+      console.error("Checkout error:", error);
+      toast({
+        title: "Erro ao iniciar pagamento",
+        description: error instanceof Error ? error.message : "Tente novamente mais tarde",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(null);
+    }
   };
 
   return (
@@ -108,9 +145,17 @@ export function UpgradeModal({ isOpen, onClose, feature = "ocr", onUpgrade, onCo
             </div>
           </div>
 
-          {/* Pricing */}
+          {/* Pricing Options */}
           <div className="space-y-3">
-            <div className="glass-card p-4 border-amber-500/30 relative overflow-hidden">
+            {/* Yearly Plan */}
+            <button
+              className={`w-full glass-card p-4 relative overflow-hidden text-left transition-all ${
+                selectedPlan === "yearly" 
+                  ? "border-amber-500 ring-2 ring-amber-500/20" 
+                  : "hover:border-amber-500/50"
+              }`}
+              onClick={() => setSelectedPlan("yearly")}
+            >
               <div className="absolute top-0 right-0 bg-amber-500 text-amber-950 text-xs font-medium px-2 py-1 rounded-bl-lg">
                 Mais popular
               </div>
@@ -126,9 +171,17 @@ export function UpgradeModal({ isOpen, onClose, feature = "ocr", onUpgrade, onCo
                   <p className="text-xs text-muted-foreground">/ano</p>
                 </div>
               </div>
-            </div>
+            </button>
             
-            <div className="glass-card p-4">
+            {/* Monthly Plan */}
+            <button
+              className={`w-full glass-card p-4 text-left transition-all ${
+                selectedPlan === "monthly" 
+                  ? "border-amber-500 ring-2 ring-amber-500/20" 
+                  : "hover:border-amber-500/50"
+              }`}
+              onClick={() => setSelectedPlan("monthly")}
+            >
               <div className="flex justify-between items-center">
                 <div>
                   <p className="font-medium text-foreground">Mensal</p>
@@ -140,7 +193,7 @@ export function UpgradeModal({ isOpen, onClose, feature = "ocr", onUpgrade, onCo
                   <p className="text-xs text-muted-foreground">/mês</p>
                 </div>
               </div>
-            </div>
+            </button>
           </div>
 
           {/* PRO benefits list */}
@@ -164,10 +217,20 @@ export function UpgradeModal({ isOpen, onClose, feature = "ocr", onUpgrade, onCo
             <div className="space-y-3">
               <Button 
                 className="w-full h-12 bg-gradient-to-r from-amber-500 to-orange-500 text-white font-semibold"
-                onClick={handleUpgrade}
+                onClick={() => handleUpgrade(selectedPlan)}
+                disabled={isLoading !== null}
               >
-                <Crown className="w-5 h-5 mr-2" />
-                Ativar Pro para a Família
+                {isLoading ? (
+                  <>
+                    <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                    Redirecionando...
+                  </>
+                ) : (
+                  <>
+                    <CreditCard className="w-5 h-5 mr-2" />
+                    Assinar {selectedPlan === "yearly" ? "Anual" : "Mensal"}
+                  </>
+                )}
               </Button>
               {showManualOption && onContinueManually && (
                 <Button 
@@ -204,6 +267,11 @@ export function UpgradeModal({ isOpen, onClose, feature = "ocr", onUpgrade, onCo
               )}
             </div>
           )}
+
+          <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+            <CreditCard className="w-3 h-3" />
+            <span>Pagamento seguro via Stripe</span>
+          </div>
 
           <p className="text-xs text-center text-muted-foreground">
             Cancele quando quiser. Sem compromisso.
