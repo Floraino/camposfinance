@@ -494,10 +494,16 @@ export function AssistantChat() {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Quick Suggestions */}
+      {/* Quick Suggestions - Enhanced with actionable prompts */}
       <div className="px-4 py-2 border-t border-border">
         <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-2">
-          {["Como economizar?", "Resumo do mês", "Comparar com mês passado", "Gastos por categoria"].map((suggestion) => (
+          {[
+            "📊 Diagnóstico de economia",
+            "🎯 Ver metas do mês",
+            "📋 Verificar pendências",
+            "📜 Listar regras automáticas",
+            "💡 Sugestões de economia",
+          ].map((suggestion) => (
             <button
               key={suggestion}
               onClick={() => handleSuggestionClick(suggestion)}
