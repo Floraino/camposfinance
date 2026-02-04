@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { X, Camera, Image as ImageIcon, ChevronRight, Loader2, User, Sparkles } from "lucide-react";
+import { X, Camera, Image as ImageIcon, ChevronRight, Loader2, User, Sparkles, Crown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CategoryBadge, categoryConfig, type CategoryType } from "@/components/ui/CategoryBadge";
 import { cn } from "@/lib/utils";
@@ -8,7 +8,9 @@ import { getFamilyMembers, type FamilyMember } from "@/services/familyService";
 import { categorizeDescription } from "@/services/categorizationService";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-
+import { useHousehold } from "@/hooks/useHousehold";
+import { UpgradeModal } from "@/components/paywall/UpgradeModal";
+import { Badge } from "@/components/ui/badge";
 interface AddTransactionSheetProps {
   isOpen: boolean;
   onClose: () => void;
@@ -35,11 +37,15 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
   const [memberId, setMemberId] = useState<string | undefined>(undefined);
   const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>([]);
   const [manualCategorySet, setManualCategorySet] = useState(false);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
+  const [attachedImage, setAttachedImage] = useState<string | null>(null);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const categorizationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { toast } = useToast();
+  const { canUseOCR, isAdmin, planType } = useHousehold();
 
   useEffect(() => {
     if (isOpen && householdId) {
@@ -96,7 +102,21 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
     }
   };
 
-  const handleFileSelect = async (file: File) => {
+  const handleScanCouponClick = () => {
+    if (!canUseOCR) {
+      setShowUpgradeModal(true);
+      return;
+    }
+    cameraInputRef.current?.click();
+  };
+
+  const handleSendImageClick = () => {
+    // For BASIC users, just attach image and go to manual form
+    // For PRO users, will process with OCR
+    fileInputRef.current?.click();
+  };
+
+  const handleFileSelect = async (file: File, isFromCamera: boolean = false) => {
     if (!file.type.startsWith("image/")) {
       toast({
         title: "Arquivo inválido",
@@ -106,13 +126,33 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
       return;
     }
 
-    // Convert to base64
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const base64 = (reader.result as string).split(",")[1];
-      await processImage(base64, file.type);
+    // Store the image as attachment preview
+    const previewReader = new FileReader();
+    previewReader.onload = () => {
+      setAttachedImage(previewReader.result as string);
     };
-    reader.readAsDataURL(file);
+    previewReader.readAsDataURL(file);
+
+    // If PRO and from camera (Escanear Cupom), always do OCR
+    // If PRO and from file (Enviar Imagem), also do OCR
+    // If BASIC, just attach image without OCR
+    if (canUseOCR) {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const base64 = (reader.result as string).split(",")[1];
+        await processImage(base64, file.type);
+      };
+      reader.readAsDataURL(file);
+    } else {
+      // BASIC: just attach image, don't process OCR
+      toast({
+        title: "Imagem anexada",
+        description: "Preencha os dados manualmente abaixo",
+      });
+      // Reset file inputs
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      if (cameraInputRef.current) cameraInputRef.current.value = "";
+    }
   };
 
   const processImage = async (imageBase64: string, mimeType: string) => {
@@ -137,13 +177,18 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
             "Content-Type": "application/json",
             Authorization: `Bearer ${session.access_token}`,
           },
-          body: JSON.stringify({ imageBase64, mimeType }),
+          body: JSON.stringify({ imageBase64, mimeType, householdId }),
         }
       );
 
       const data = await response.json();
 
       if (!response.ok) {
+        // Handle PRO_REQUIRED error specifically
+        if (data.code === "PRO_REQUIRED") {
+          setShowUpgradeModal(true);
+          return;
+        }
         throw new Error(data.error || "Erro ao processar imagem");
       }
 
@@ -172,6 +217,11 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
     }
   };
 
+  const handleContinueManually = () => {
+    setShowUpgradeModal(false);
+    // Form is already open, user can fill manually
+  };
+
   const handleSubmit = () => {
     if (!description || !amount) return;
 
@@ -194,6 +244,7 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
     setIsRecurring(false);
     setMemberId(undefined);
     setManualCategorySet(false);
+    setAttachedImage(null);
     onClose();
   };
 
@@ -227,8 +278,8 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
           <div className="flex gap-3">
             <Button 
               variant="outline" 
-              className="flex-1 h-14 gap-3"
-              onClick={() => cameraInputRef.current?.click()}
+              className="flex-1 h-14 gap-2 relative"
+              onClick={handleScanCouponClick}
               disabled={isScanning}
             >
               {isScanning ? (
@@ -236,12 +287,18 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
               ) : (
                 <Camera className="w-5 h-5 text-primary" />
               )}
-              <span>{isScanning ? "Analisando..." : "Escanear Cupom"}</span>
+              <span className="text-sm">{isScanning ? "Analisando..." : "Escanear Cupom"}</span>
+              {!canUseOCR && (
+                <Badge className="absolute -top-2 -right-2 bg-accent text-accent-foreground text-[10px] px-1.5 py-0.5 flex items-center gap-0.5">
+                  <Crown className="w-3 h-3" />
+                  PRO
+                </Badge>
+              )}
             </Button>
             <Button 
               variant="outline" 
-              className="flex-1 h-14 gap-3"
-              onClick={() => fileInputRef.current?.click()}
+              className="flex-1 h-14 gap-2 relative"
+              onClick={handleSendImageClick}
               disabled={isScanning}
             >
               {isScanning ? (
@@ -249,9 +306,39 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
               ) : (
                 <ImageIcon className="w-5 h-5 text-primary" />
               )}
-              <span>{isScanning ? "Analisando..." : "Enviar Imagem"}</span>
+              <span className="text-sm">{isScanning ? "Analisando..." : "Enviar Imagem"}</span>
+              {!canUseOCR && (
+                <Badge className="absolute -top-2 -right-2 bg-accent text-accent-foreground text-[10px] px-1.5 py-0.5 flex items-center gap-0.5">
+                  <Crown className="w-3 h-3" />
+                  PRO
+                </Badge>
+              )}
             </Button>
           </div>
+
+          {/* Attached image preview */}
+          {attachedImage && (
+            <div className="relative">
+              <img 
+                src={attachedImage} 
+                alt="Imagem anexada" 
+                className="w-full h-32 object-cover rounded-xl border border-border"
+              />
+              <Button
+                variant="destructive"
+                size="icon-sm"
+                className="absolute top-2 right-2"
+                onClick={() => setAttachedImage(null)}
+              >
+                <X className="w-4 h-4" />
+              </Button>
+              {!canUseOCR && (
+                <p className="text-xs text-muted-foreground mt-1 text-center">
+                  Imagem anexada • Preencha os dados manualmente
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Hidden file inputs */}
           <input
@@ -260,14 +347,14 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
             accept="image/*"
             capture="environment"
             className="hidden"
-            onChange={(e) => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
+            onChange={(e) => e.target.files?.[0] && handleFileSelect(e.target.files[0], true)}
           />
           <input
             ref={fileInputRef}
             type="file"
             accept="image/*"
             className="hidden"
-            onChange={(e) => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
+            onChange={(e) => e.target.files?.[0] && handleFileSelect(e.target.files[0], false)}
           />
           
           <div className="flex items-center gap-4">
@@ -458,6 +545,14 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
           </Button>
         </div>
       </div>
+
+      {/* Upgrade Modal */}
+      <UpgradeModal
+        isOpen={showUpgradeModal}
+        onClose={() => setShowUpgradeModal(false)}
+        feature="ocr"
+        onContinueManually={handleContinueManually}
+      />
     </div>
   );
 }

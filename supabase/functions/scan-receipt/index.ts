@@ -55,7 +55,53 @@ serve(async (req) => {
       });
     }
 
-    const { imageBase64, mimeType } = await req.json();
+    const { imageBase64, mimeType, householdId } = await req.json();
+
+    // Validate household membership and PRO plan
+    if (!householdId) {
+      return new Response(JSON.stringify({ error: "Household ID é obrigatório" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Check if user is member of the household
+    const { data: memberData, error: memberError } = await supabase
+      .from("household_members")
+      .select("id")
+      .eq("household_id", householdId)
+      .eq("user_id", user.id)
+      .single();
+
+    if (memberError || !memberData) {
+      return new Response(JSON.stringify({ error: "Você não é membro desta família" }), {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Check if household has PRO plan using the can_use_ocr function
+    const { data: canUseOcr, error: planError } = await supabase
+      .rpc("can_use_ocr", { _household_id: householdId });
+
+    if (planError) {
+      console.error("Error checking OCR permission:", planError);
+      return new Response(JSON.stringify({ error: "Erro ao verificar permissão" }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (!canUseOcr) {
+      return new Response(JSON.stringify({ 
+        error: "Recurso PRO",
+        message: "OCR está disponível apenas no plano PRO da família",
+        code: "PRO_REQUIRED"
+      }), {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     if (!imageBase64) {
       return new Response(JSON.stringify({ error: "No image provided" }), {

@@ -78,13 +78,19 @@ export function ReceiptScanner({ isOpen, onClose, onTransactionAdded, onContinue
             "Content-Type": "application/json",
             Authorization: `Bearer ${session.access_token}`,
           },
-          body: JSON.stringify({ imageBase64, mimeType }),
+          body: JSON.stringify({ imageBase64, mimeType, householdId }),
         }
       );
 
       const data = await response.json();
 
       if (!response.ok) {
+        // Handle PRO_REQUIRED error specifically
+        if (data.code === "PRO_REQUIRED") {
+          setShowUpgradeModal(true);
+          resetScanner();
+          return;
+        }
         throw new Error(data.error || "Erro ao processar cupom");
       }
 
