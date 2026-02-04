@@ -60,6 +60,10 @@ serve(async (req) => {
         // Get subscription details
         const subscription = await stripe.subscriptions.retrieve(session.subscription as string);
         const periodEnd = new Date(subscription.current_period_end * 1000).toISOString();
+        const periodStart = new Date(subscription.current_period_start * 1000).toISOString();
+        
+        // Get the price ID being used
+        const priceId = subscription.items.data[0]?.price?.id || null;
 
         // Update household plan to PRO
         const { error } = await supabaseAdmin
@@ -71,7 +75,7 @@ serve(async (req) => {
             stripe_customer_id: session.customer as string,
             stripe_subscription_id: session.subscription as string,
             pro_expires_at: periodEnd,
-            started_at: new Date().toISOString(),
+            started_at: periodStart,
             updated_at: new Date().toISOString(),
           })
           .eq("household_id", householdId);
@@ -79,8 +83,38 @@ serve(async (req) => {
         if (error) {
           logStep("Failed to update household plan", { error, householdId });
         } else {
-          logStep("Household upgraded to PRO", { householdId, periodEnd });
+          logStep("Household upgraded to PRO", { householdId, periodEnd, priceId });
         }
+        break;
+      }
+
+      case "customer.subscription.created": {
+        const subscription = event.data.object as Stripe.Subscription;
+        const householdId = subscription.metadata?.household_id;
+        
+        if (!householdId) {
+          logStep("No household_id in subscription metadata", { subscriptionId: subscription.id });
+          break;
+        }
+
+        const periodEnd = new Date(subscription.current_period_end * 1000).toISOString();
+        const periodStart = new Date(subscription.current_period_start * 1000).toISOString();
+
+        // Update household plan
+        await supabaseAdmin
+          .from("household_plans")
+          .update({
+            plan: "PRO",
+            status: "active",
+            source: "subscription",
+            stripe_subscription_id: subscription.id,
+            pro_expires_at: periodEnd,
+            started_at: periodStart,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("household_id", householdId);
+
+        logStep("Subscription created", { householdId, subscriptionId: subscription.id });
         break;
       }
 

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { X, Crown, Check, ChevronRight, Home, Ticket, Loader2, CreditCard, ExternalLink, RefreshCw } from "lucide-react";
+import { X, Crown, Check, ChevronRight, Home, Ticket, Loader2, CreditCard, ExternalLink, RefreshCw, Smartphone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useHousehold } from "@/hooks/useHousehold";
@@ -9,6 +9,7 @@ import { UpgradeModal } from "@/components/paywall/UpgradeModal";
 import { RedeemCouponSheet } from "./RedeemCouponSheet";
 import { createCheckout, checkSubscription, openCustomerPortal, type SubscriptionStatus, type PriceType } from "@/services/subscriptionService";
 import { useToast } from "@/hooks/use-toast";
+import { isNativeApp, getSubscriptionWebUrl, openExternalUrl } from "@/lib/platform";
 
 interface FamilyPlanSheetProps {
   isOpen: boolean;
@@ -79,6 +80,19 @@ export function FamilyPlanSheet({ isOpen, onClose }: FamilyPlanSheetProps) {
     
     setIsLoadingCheckout(priceType);
     try {
+      // For native mobile apps, open external browser to comply with app store policies
+      if (isNativeApp()) {
+        const subscribeUrl = getSubscriptionWebUrl(currentHousehold.id, priceType);
+        await openExternalUrl(subscribeUrl);
+        toast({
+          title: "Navegador aberto",
+          description: "Complete a assinatura no navegador. Volte ao app quando finalizar.",
+        });
+        setIsLoadingCheckout(null);
+        return;
+      }
+      
+      // For web, create checkout and open in new tab
       const checkoutUrl = await createCheckout(currentHousehold.id, priceType);
       window.open(checkoutUrl, "_blank");
       toast({
