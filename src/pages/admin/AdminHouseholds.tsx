@@ -76,12 +76,17 @@ export default function AdminHouseholds() {
       const result = await grantProDays(selectedHousehold.id, parseInt(daysToGrant));
       if (result.success) {
         toast({ title: "Pro concedido!", description: `${daysToGrant} dias adicionados.` });
-        loadHouseholds(search || undefined);
+        // Reload and update selected household
+        const freshData = await getAdminHouseholds(search || undefined);
+        setHouseholds(freshData);
+        const updated = freshData.find(h => h.id === selectedHousehold.id);
+        if (updated) setSelectedHousehold(updated);
         setShowGrantDays(false);
       } else {
         toast({ title: "Erro", description: result.error, variant: "destructive" });
       }
     } catch (error) {
+      console.error("Error granting days:", error);
       toast({ title: "Erro", description: "Falha ao conceder Pro", variant: "destructive" });
     } finally {
       setIsProcessing(false);
@@ -104,12 +109,17 @@ export default function AdminHouseholds() {
       const result = await setHouseholdPlan(selectedHousehold.id, "BASIC");
       if (result.success) {
         toast({ title: "Plano alterado", description: "Família agora é BASIC" });
-        loadHouseholds(search || undefined);
+        // Reload and update selected household
+        const freshData = await getAdminHouseholds(search || undefined);
+        setHouseholds(freshData);
+        const updated = freshData.find(h => h.id === selectedHousehold.id);
+        if (updated) setSelectedHousehold(updated);
         setShowDetail(false);
       } else {
         toast({ title: "Erro", description: result.error, variant: "destructive" });
       }
     } catch (error) {
+      console.error("Error setting plan:", error);
       toast({ title: "Erro", description: "Falha ao alterar plano", variant: "destructive" });
     } finally {
       setIsProcessing(false);
@@ -123,10 +133,14 @@ export default function AdminHouseholds() {
     try {
       await deleteHousehold(selectedHousehold.id);
       toast({ title: "Família excluída", description: "Todos os dados foram removidos." });
-      loadHouseholds(search || undefined);
+      // Reload list after deletion
+      const freshData = await getAdminHouseholds(search || undefined);
+      setHouseholds(freshData);
       setShowConfirmDelete(false);
       setShowDetail(false);
+      setSelectedHousehold(null);
     } catch (error) {
+      console.error("Error deleting household:", error);
       toast({ title: "Erro", description: "Falha ao excluir família", variant: "destructive" });
     } finally {
       setIsProcessing(false);
@@ -140,10 +154,14 @@ export default function AdminHouseholds() {
     try {
       await updateHouseholdName(selectedHousehold.id, newName.trim());
       toast({ title: "Nome atualizado" });
-      loadHouseholds(search || undefined);
+      // Reload and update selected household
+      const freshData = await getAdminHouseholds(search || undefined);
+      setHouseholds(freshData);
+      const updated = freshData.find(h => h.id === selectedHousehold.id);
+      if (updated) setSelectedHousehold(updated);
       setShowEditName(false);
-      setSelectedHousehold({ ...selectedHousehold, name: newName.trim() });
     } catch (error) {
+      console.error("Error updating name:", error);
       toast({ title: "Erro", description: "Falha ao atualizar nome", variant: "destructive" });
     } finally {
       setIsProcessing(false);

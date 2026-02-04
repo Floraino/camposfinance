@@ -180,41 +180,63 @@ export async function setUserBlocked(userId: string, blocked: boolean): Promise<
 
   const { error } = await supabase
     .from("profiles")
-    .update({ is_blocked: blocked })
+    .update({ is_blocked: blocked, updated_at: new Date().toISOString() })
     .eq("user_id", userId);
 
   if (error) throw error;
 
-  // Log action
-  await supabase.from("admin_audit_logs").insert({
+  // Log action (don't throw on audit failure, just log)
+  const { error: auditError } = await supabase.from("admin_audit_logs").insert({
     admin_user_id: user.id,
     action_type: blocked ? "block_user" : "unblock_user",
     target_type: "user",
     target_id: userId,
-    metadata: {},
+    metadata: { blocked },
   });
+  if (auditError) console.error("Failed to log audit:", auditError);
 }
 
-// Set user role
+// Set user role - properly handles upsert/delete
 export async function setUserRole(userId: string, role: "super_admin" | "user"): Promise<void> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Não autenticado");
 
-  // Upsert role
-  const { error } = await supabase
-    .from("user_roles")
-    .upsert({ user_id: userId, role }, { onConflict: "user_id,role" });
+  if (role === "user") {
+    // Remove super_admin role - delete the entry
+    const { error } = await supabase
+      .from("user_roles")
+      .delete()
+      .eq("user_id", userId)
+      .eq("role", "super_admin");
+    
+    if (error) throw error;
+  } else {
+    // Add super_admin role - check if exists first
+    const { data: existingRole } = await supabase
+      .from("user_roles")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("role", "super_admin")
+      .single();
 
-  if (error) throw error;
+    if (!existingRole) {
+      const { error } = await supabase
+        .from("user_roles")
+        .insert({ user_id: userId, role: "super_admin" });
+      
+      if (error) throw error;
+    }
+  }
 
   // Log action
-  await supabase.from("admin_audit_logs").insert({
+  const { error: auditError } = await supabase.from("admin_audit_logs").insert({
     admin_user_id: user.id,
     action_type: role === "super_admin" ? "promote_admin" : "revoke_admin",
     target_type: "user",
     target_id: userId,
     metadata: { new_role: role },
   });
+  if (auditError) console.error("Failed to log audit:", auditError);
 }
 
 // Coupons
@@ -267,13 +289,14 @@ export async function createCoupon(coupon: {
   if (error) throw error;
 
   // Log action
-  await supabase.from("admin_audit_logs").insert({
+  const { error: auditError } = await supabase.from("admin_audit_logs").insert({
     admin_user_id: user.id,
     action_type: "create_coupon",
     target_type: "coupon",
     target_id: data.id,
     metadata: { code: data.code, days_granted: data.days_granted },
   });
+  if (auditError) console.error("Failed to log audit:", auditError);
 
   return data;
 }
@@ -290,13 +313,14 @@ export async function deactivateCoupon(couponId: string): Promise<void> {
   if (error) throw error;
 
   // Log action
-  await supabase.from("admin_audit_logs").insert({
+  const { error: auditError } = await supabase.from("admin_audit_logs").insert({
     admin_user_id: user.id,
     action_type: "deactivate_coupon",
     target_type: "coupon",
     target_id: couponId,
     metadata: {},
   });
+  if (auditError) console.error("Failed to log audit:", auditError);
 }
 
 // Audit logs
@@ -351,7 +375,26 @@ export async function deleteHousehold(householdId: string): Promise<void> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Não autenticado");
 
+  // Get household name before deletion for audit log
+  const { data: householdData } = await supabase
+    .from("households")
+    .select("name")
+    .eq("id", householdId)
+    .single();
+
   // Delete related data first (cascade may not be set up)
+  // Also delete split-related data
+  const { data: splitEvents } = await supabase
+    .from("split_events")
+    .select("id")
+    .eq("owner_household_id", householdId);
+
+  if (splitEvents && splitEvents.length > 0) {
+    const splitEventIds = splitEvents.map(s => s.id);
+    await supabase.from("split_participants").delete().in("split_event_id", splitEventIds);
+    await supabase.from("split_events").delete().eq("owner_household_id", householdId);
+  }
+
   await supabase.from("transactions").delete().eq("household_id", householdId);
   await supabase.from("accounts").delete().eq("household_id", householdId);
   await supabase.from("family_members").delete().eq("household_id", householdId);
@@ -367,19 +410,26 @@ export async function deleteHousehold(householdId: string): Promise<void> {
   if (error) throw error;
 
   // Log action
-  await supabase.from("admin_audit_logs").insert({
+  const { error: auditError } = await supabase.from("admin_audit_logs").insert({
     admin_user_id: user.id,
     action_type: "delete_household",
     target_type: "household",
     target_id: householdId,
-    metadata: {},
+    metadata: { household_name: householdData?.name },
   });
+  if (auditError) console.error("Failed to log audit:", auditError);
 }
 
 // Update household name
 export async function updateHouseholdName(householdId: string, name: string): Promise<void> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Não autenticado");
+
+  const { data: oldData } = await supabase
+    .from("households")
+    .select("name")
+    .eq("id", householdId)
+    .single();
 
   const { error } = await supabase
     .from("households")
@@ -389,19 +439,27 @@ export async function updateHouseholdName(householdId: string, name: string): Pr
   if (error) throw error;
 
   // Log action
-  await supabase.from("admin_audit_logs").insert({
+  const { error: auditError } = await supabase.from("admin_audit_logs").insert({
     admin_user_id: user.id,
     action_type: "update_household",
     target_type: "household",
     target_id: householdId,
-    metadata: { new_name: name },
+    metadata: { old_name: oldData?.name, new_name: name },
   });
+  if (auditError) console.error("Failed to log audit:", auditError);
 }
 
 // Delete user profile (does not delete auth user, just profile)
 export async function deleteUserProfile(userId: string): Promise<void> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Não autenticado");
+
+  // Get user info before deletion for audit
+  const { data: profileData } = await supabase
+    .from("profiles")
+    .select("display_name")
+    .eq("user_id", userId)
+    .single();
 
   // Remove from all households
   await supabase.from("household_members").delete().eq("user_id", userId);
@@ -416,19 +474,26 @@ export async function deleteUserProfile(userId: string): Promise<void> {
   if (error) throw error;
 
   // Log action
-  await supabase.from("admin_audit_logs").insert({
+  const { error: auditError } = await supabase.from("admin_audit_logs").insert({
     admin_user_id: user.id,
     action_type: "delete_user",
     target_type: "user",
     target_id: userId,
-    metadata: {},
+    metadata: { display_name: profileData?.display_name },
   });
+  if (auditError) console.error("Failed to log audit:", auditError);
 }
 
 // Update user display name
 export async function updateUserDisplayName(userId: string, displayName: string): Promise<void> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Não autenticado");
+
+  const { data: oldData } = await supabase
+    .from("profiles")
+    .select("display_name")
+    .eq("user_id", userId)
+    .single();
 
   const { error } = await supabase
     .from("profiles")
@@ -438,11 +503,12 @@ export async function updateUserDisplayName(userId: string, displayName: string)
   if (error) throw error;
 
   // Log action
-  await supabase.from("admin_audit_logs").insert({
+  const { error: auditError } = await supabase.from("admin_audit_logs").insert({
     admin_user_id: user.id,
     action_type: "update_user",
     target_type: "user",
     target_id: userId,
-    metadata: { new_display_name: displayName },
+    metadata: { old_display_name: oldData?.display_name, new_display_name: displayName },
   });
+  if (auditError) console.error("Failed to log audit:", auditError);
 }

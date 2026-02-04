@@ -78,10 +78,13 @@ export default function AdminCoupons() {
         notes: newNotes || undefined,
       });
       toast({ title: "Cupom criado!", description: `Código: ${newCode}` });
-      loadCoupons();
+      // Reload list after creation
+      const freshData = await getAdminCoupons();
+      setCoupons(freshData);
       setShowCreate(false);
       resetForm();
     } catch (error: any) {
+      console.error("Error creating coupon:", error);
       toast({ 
         title: "Erro", 
         description: error.message?.includes("duplicate") ? "Código já existe" : "Falha ao criar cupom", 
@@ -99,9 +102,13 @@ export default function AdminCoupons() {
     try {
       await deactivateCoupon(selectedCoupon.id);
       toast({ title: "Cupom desativado" });
-      loadCoupons();
+      // Reload list after deactivation
+      const freshData = await getAdminCoupons();
+      setCoupons(freshData);
       setShowConfirmDeactivate(false);
+      setSelectedCoupon(null);
     } catch (error) {
+      console.error("Error deactivating coupon:", error);
       toast({ title: "Erro", description: "Falha ao desativar", variant: "destructive" });
     } finally {
       setIsProcessing(false);
@@ -173,7 +180,7 @@ export default function AdminCoupons() {
                       onClick={() => copyCode(coupon.code)}
                     >
                       {copiedCode === coupon.code ? (
-                        <Check className="w-4 h-4 text-green-500" />
+                        <Check className="w-4 h-4 text-accent" />
                       ) : (
                         <Copy className="w-4 h-4" />
                       )}
@@ -182,7 +189,7 @@ export default function AdminCoupons() {
                   <div className="flex items-center gap-2">
                     <span className={`text-xs px-2 py-1 rounded-full ${
                       coupon.is_active 
-                        ? "bg-green-500/20 text-green-500" 
+                        ? "bg-accent/20 text-accent" 
                         : "bg-muted text-muted-foreground"
                     }`}>
                       {coupon.is_active ? "Ativo" : "Inativo"}

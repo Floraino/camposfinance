@@ -76,10 +76,14 @@ export default function AdminUsers() {
       toast({
         title: selectedUser.is_blocked ? "Usuário desbloqueado" : "Usuário bloqueado",
       });
-      loadUsers(search || undefined);
+      // Reload and update selected user
+      const freshData = await getAdminUsers(search || undefined);
+      setUsers(freshData);
+      const updated = freshData.find(u => u.user_id === selectedUser.user_id);
+      if (updated) setSelectedUser(updated);
       setShowConfirmBlock(false);
-      setShowDetail(false);
     } catch (error) {
+      console.error("Error toggling block:", error);
       toast({ title: "Erro", description: "Falha ao alterar status", variant: "destructive" });
     } finally {
       setIsProcessing(false);
@@ -96,10 +100,14 @@ export default function AdminUsers() {
       toast({
         title: newRole === "super_admin" ? "Admin promovido" : "Admin revogado",
       });
-      loadUsers(search || undefined);
+      // Reload and update selected user
+      const freshData = await getAdminUsers(search || undefined);
+      setUsers(freshData);
+      const updated = freshData.find(u => u.user_id === selectedUser.user_id);
+      if (updated) setSelectedUser(updated);
       setShowConfirmAdmin(false);
-      setShowDetail(false);
     } catch (error) {
+      console.error("Error toggling admin:", error);
       toast({ title: "Erro", description: "Falha ao alterar role", variant: "destructive" });
     } finally {
       setIsProcessing(false);
@@ -113,10 +121,14 @@ export default function AdminUsers() {
     try {
       await deleteUserProfile(selectedUser.user_id);
       toast({ title: "Usuário excluído", description: "Perfil e dados removidos." });
-      loadUsers(search || undefined);
+      // Reload list after deletion
+      const freshData = await getAdminUsers(search || undefined);
+      setUsers(freshData);
       setShowConfirmDelete(false);
       setShowDetail(false);
+      setSelectedUser(null);
     } catch (error) {
+      console.error("Error deleting user:", error);
       toast({ title: "Erro", description: "Falha ao excluir usuário", variant: "destructive" });
     } finally {
       setIsProcessing(false);
@@ -130,10 +142,14 @@ export default function AdminUsers() {
     try {
       await updateUserDisplayName(selectedUser.user_id, newDisplayName.trim());
       toast({ title: "Nome atualizado" });
-      loadUsers(search || undefined);
+      // Reload and update selected user
+      const freshData = await getAdminUsers(search || undefined);
+      setUsers(freshData);
+      const updated = freshData.find(u => u.user_id === selectedUser.user_id);
+      if (updated) setSelectedUser(updated);
       setShowEditName(false);
-      setSelectedUser({ ...selectedUser, display_name: newDisplayName.trim() });
     } catch (error) {
+      console.error("Error updating name:", error);
       toast({ title: "Erro", description: "Falha ao atualizar nome", variant: "destructive" });
     } finally {
       setIsProcessing(false);
