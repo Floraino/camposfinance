@@ -1,1 +1,31 @@
 project_id = "fnuqadvfdllnuchlorjd"
+
+[functions.secure-login]
+verify_jwt = false
+
+[functions.password-reset]
+verify_jwt = false
+
+[functions.auth-logout]
+verify_jwt = false
+
+[functions.create-checkout]
+verify_jwt = false
+
+[functions.check-subscription]
+verify_jwt = false
+
+[functions.customer-portal]
+verify_jwt = false
+
+[functions.stripe-webhook]
+verify_jwt = false
+
+[functions.categorize-transaction]
+verify_jwt = false
+
+[functions.clara-chat]
+verify_jwt = false
+
+[functions.scan-receipt]
+verify_jwt = false

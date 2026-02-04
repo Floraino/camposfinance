@@ -1,25 +1,54 @@
-import { useState } from "react";
-import { X, Shield, Lock, Eye, EyeOff, Loader2, CheckCircle } from "lucide-react";
+import { useState, useEffect } from "react";
+import { X, Shield, Lock, Eye, EyeOff, Loader2, CheckCircle, Clock, LogOut, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { updatePassword, getAuthEvents } from "@/services/secureAuthService";
+import { validatePassword, getPasswordStrength } from "@/lib/authValidation";
 
 interface SecuritySheetProps {
   open: boolean;
   onClose: () => void;
 }
 
+interface AuthEvent {
+  id: string;
+  event_type: string;
+  ip_address: string | null;
+  user_agent: string | null;
+  created_at: string;
+}
+
 export function SecuritySheet({ open, onClose }: SecuritySheetProps) {
   const { user } = useAuth();
   const { toast } = useToast();
   const [showChangePassword, setShowChangePassword] = useState(false);
-  const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [isChanging, setIsChanging] = useState(false);
+  const [authEvents, setAuthEvents] = useState<AuthEvent[]>([]);
+  const [loadingEvents, setLoadingEvents] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      loadAuthEvents();
+    }
+  }, [open]);
+
+  const loadAuthEvents = async () => {
+    setLoadingEvents(true);
+    try {
+      const events = await getAuthEvents(10);
+      setAuthEvents(events);
+    } finally {
+      setLoadingEvents(false);
+    }
+  };
+
+  const passwordErrors = validatePassword(newPassword);
+  const passwordStrength = getPasswordStrength(newPassword);
 
   const handleChangePassword = async () => {
     if (newPassword !== confirmPassword) {
@@ -31,10 +60,10 @@ export function SecuritySheet({ open, onClose }: SecuritySheetProps) {
       return;
     }
 
-    if (newPassword.length < 6) {
+    if (passwordErrors.length > 0) {
       toast({
-        title: "Senha muito curta",
-        description: "A senha deve ter pelo menos 6 caracteres.",
+        title: "Senha inválida",
+        description: passwordErrors[0],
         variant: "destructive",
       });
       return;
@@ -43,11 +72,11 @@ export function SecuritySheet({ open, onClose }: SecuritySheetProps) {
     setIsChanging(true);
 
     try {
-      const { error } = await supabase.auth.updateUser({
-        password: newPassword,
-      });
+      const result = await updatePassword(newPassword);
 
-      if (error) throw error;
+      if (!result.success) {
+        throw new Error(result.error);
+      }
 
       toast({
         title: "Senha alterada!",
@@ -55,11 +84,10 @@ export function SecuritySheet({ open, onClose }: SecuritySheetProps) {
       });
 
       setShowChangePassword(false);
-      setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
+      loadAuthEvents(); // Refresh events
     } catch (error: any) {
-      console.error("Error changing password:", error);
       toast({
         title: "Erro ao alterar senha",
         description: error.message || "Tente novamente mais tarde.",
@@ -68,6 +96,31 @@ export function SecuritySheet({ open, onClose }: SecuritySheetProps) {
     } finally {
       setIsChanging(false);
     }
+  };
+
+  const formatEventType = (type: string): { label: string; color: string; icon: typeof CheckCircle } => {
+    const types: Record<string, { label: string; color: string; icon: typeof CheckCircle }> = {
+      login_success: { label: "Login bem-sucedido", color: "text-success", icon: CheckCircle },
+      login_failed: { label: "Tentativa de login", color: "text-destructive", icon: AlertTriangle },
+      logout: { label: "Logout", color: "text-muted-foreground", icon: LogOut },
+      password_reset_requested: { label: "Recuperação de senha", color: "text-warning", icon: Lock },
+      password_reset_completed: { label: "Senha alterada", color: "text-success", icon: Lock },
+      password_changed: { label: "Senha alterada", color: "text-success", icon: Lock },
+      session_revoked: { label: "Sessão encerrada", color: "text-warning", icon: LogOut },
+      account_locked: { label: "Conta bloqueada", color: "text-destructive", icon: AlertTriangle },
+    };
+    return types[type] || { label: type, color: "text-muted-foreground", icon: Clock };
+  };
+
+  const formatUserAgent = (ua: string | null): string => {
+    if (!ua) return "Desconhecido";
+    if (ua.includes("Mobile") || ua.includes("Android") || ua.includes("iPhone")) {
+      return "Celular";
+    }
+    if (ua.includes("Windows")) return "Windows";
+    if (ua.includes("Mac")) return "Mac";
+    if (ua.includes("Linux")) return "Linux";
+    return "Navegador";
   };
 
   if (!open) return null;
@@ -96,10 +149,10 @@ export function SecuritySheet({ open, onClose }: SecuritySheetProps) {
           <div className="p-4 bg-success/10 rounded-xl border border-success/20">
             <div className="flex items-center gap-3 mb-2">
               <CheckCircle className="w-5 h-5 text-success" />
-              <span className="font-medium text-foreground">Backup Ativado</span>
+              <span className="font-medium text-foreground">Proteção Ativa</span>
             </div>
             <p className="text-sm text-muted-foreground">
-              Seus dados são automaticamente salvos e protegidos na nuvem.
+              Sua conta está protegida com rate limiting e sessões seguras.
             </p>
           </div>
 
@@ -123,8 +176,10 @@ export function SecuritySheet({ open, onClose }: SecuritySheetProps) {
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Autenticação</span>
-                <span className="text-success">Email verificado</span>
+                <span className="text-muted-foreground">Email verificado</span>
+                <span className={user?.email_confirmed_at ? "text-success" : "text-warning"}>
+                  {user?.email_confirmed_at ? "Sim" : "Pendente"}
+                </span>
               </div>
             </div>
           </div>
@@ -155,6 +210,35 @@ export function SecuritySheet({ open, onClose }: SecuritySheetProps) {
                   </button>
                 </div>
 
+                {/* Password Requirements */}
+                {newPassword && (
+                  <div className="space-y-1 text-xs">
+                    <div className={`flex items-center gap-2 ${newPassword.length >= 8 ? "text-success" : "text-muted-foreground"}`}>
+                      {newPassword.length >= 8 ? "✓" : "○"} Mínimo 8 caracteres
+                    </div>
+                    <div className={`flex items-center gap-2 ${/[a-zA-Z]/.test(newPassword) ? "text-success" : "text-muted-foreground"}`}>
+                      {/[a-zA-Z]/.test(newPassword) ? "✓" : "○"} Pelo menos uma letra
+                    </div>
+                    <div className={`flex items-center gap-2 ${/[0-9]/.test(newPassword) ? "text-success" : "text-muted-foreground"}`}>
+                      {/[0-9]/.test(newPassword) ? "✓" : "○"} Pelo menos um número
+                    </div>
+                    <div className="flex items-center gap-2 mt-2">
+                      <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                        <div
+                          className={`h-full transition-all ${
+                            passwordStrength.color === "destructive" ? "bg-destructive" :
+                            passwordStrength.color === "warning" ? "bg-warning" :
+                            passwordStrength.color === "primary" ? "bg-primary" :
+                            "bg-success"
+                          }`}
+                          style={{ width: `${(passwordStrength.score / 5) * 100}%` }}
+                        />
+                      </div>
+                      <span className="text-xs">{passwordStrength.label}</span>
+                    </div>
+                  </div>
+                )}
+
                 <input
                   type={showNewPassword ? "text" : "password"}
                   placeholder="Confirmar nova senha"
@@ -179,7 +263,7 @@ export function SecuritySheet({ open, onClose }: SecuritySheetProps) {
                     variant="accent" 
                     className="flex-1"
                     onClick={handleChangePassword}
-                    disabled={isChanging || !newPassword || !confirmPassword}
+                    disabled={isChanging || !newPassword || !confirmPassword || passwordErrors.length > 0}
                   >
                     {isChanging ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
@@ -201,6 +285,46 @@ export function SecuritySheet({ open, onClose }: SecuritySheetProps) {
             </Button>
           )}
 
+          {/* Recent Activity */}
+          <div className="p-4 bg-muted/30 rounded-xl space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Clock className="w-5 h-5 text-primary" />
+                <span className="font-medium text-foreground">Atividade Recente</span>
+              </div>
+              {loadingEvents && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />}
+            </div>
+            
+            {authEvents.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Nenhuma atividade registrada</p>
+            ) : (
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {authEvents.map((event) => {
+                  const { label, color, icon: Icon } = formatEventType(event.event_type);
+                  return (
+                    <div key={event.id} className="flex items-center gap-3 text-sm py-2 border-b border-border/50 last:border-0">
+                      <Icon className={`w-4 h-4 ${color}`} />
+                      <div className="flex-1 min-w-0">
+                        <p className={`font-medium ${color}`}>{label}</p>
+                        <p className="text-xs text-muted-foreground truncate">
+                          {formatUserAgent(event.user_agent)} • {event.ip_address || "IP desconhecido"}
+                        </p>
+                      </div>
+                      <span className="text-xs text-muted-foreground whitespace-nowrap">
+                        {new Date(event.created_at).toLocaleDateString("pt-BR", {
+                          day: "2-digit",
+                          month: "2-digit",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           {/* Security Tips */}
           <div className="p-4 bg-primary/5 rounded-xl">
             <p className="font-medium text-foreground mb-2">Dicas de Segurança</p>
@@ -208,7 +332,7 @@ export function SecuritySheet({ open, onClose }: SecuritySheetProps) {
               <li>• Use uma senha única com pelo menos 8 caracteres</li>
               <li>• Inclua letras, números e símbolos</li>
               <li>• Nunca compartilhe sua senha com outras pessoas</li>
-              <li>• Ative a verificação em duas etapas quando disponível</li>
+              <li>• Fique atento a emails de phishing</li>
             </ul>
           </div>
         </div>

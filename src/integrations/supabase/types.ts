@@ -94,6 +94,42 @@ export type Database = {
         }
         Relationships: []
       }
+      auth_events: {
+        Row: {
+          created_at: string
+          device_id: string | null
+          email: string | null
+          event_type: string
+          id: string
+          ip_address: string | null
+          metadata: Json | null
+          user_agent: string | null
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          device_id?: string | null
+          email?: string | null
+          event_type: string
+          id?: string
+          ip_address?: string | null
+          metadata?: Json | null
+          user_agent?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          device_id?: string | null
+          email?: string | null
+          event_type?: string
+          id?: string
+          ip_address?: string | null
+          metadata?: Json | null
+          user_agent?: string | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       budgets: {
         Row: {
           amount: number
@@ -523,6 +559,39 @@ export type Database = {
         }
         Relationships: []
       }
+      login_attempts: {
+        Row: {
+          attempt_count: number
+          created_at: string
+          first_attempt_at: string
+          id: string
+          identifier: string
+          identifier_type: string
+          last_attempt_at: string
+          locked_until: string | null
+        }
+        Insert: {
+          attempt_count?: number
+          created_at?: string
+          first_attempt_at?: string
+          id?: string
+          identifier: string
+          identifier_type: string
+          last_attempt_at?: string
+          locked_until?: string | null
+        }
+        Update: {
+          attempt_count?: number
+          created_at?: string
+          first_attempt_at?: string
+          id?: string
+          identifier?: string
+          identifier_type?: string
+          last_attempt_at?: string
+          locked_until?: string | null
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           avatar_url: string | null
@@ -827,6 +896,17 @@ export type Database = {
         Args: { _split_event_id: string; _user_id: string }
         Returns: boolean
       }
+      check_login_rate_limit: {
+        Args: {
+          _identifier: string
+          _identifier_type: string
+          _lockout_minutes?: number
+          _max_attempts?: number
+          _window_minutes?: number
+        }
+        Returns: Json
+      }
+      cleanup_old_login_attempts: { Args: never; Returns: undefined }
       count_household_accounts: {
         Args: { _household_id: string }
         Returns: number
@@ -854,9 +934,25 @@ export type Database = {
       }
       is_super_admin: { Args: { _user_id: string }; Returns: boolean }
       join_household_by_code: { Args: { _code: string }; Returns: Json }
+      log_auth_event: {
+        Args: {
+          _device_id?: string
+          _email?: string
+          _event_type: string
+          _ip_address?: string
+          _metadata?: Json
+          _user_agent?: string
+          _user_id?: string
+        }
+        Returns: string
+      }
       redeem_coupon: {
         Args: { _code: string; _household_id: string }
         Returns: Json
+      }
+      reset_login_rate_limit: {
+        Args: { _identifier: string; _identifier_type: string }
+        Returns: undefined
       }
       respond_to_join_request: {
         Args: { _approve: boolean; _request_id: string }
