@@ -29,3 +29,9 @@ verify_jwt = false
 
 [functions.scan-receipt]
 verify_jwt = false
+
+[functions.analyze-csv]
+verify_jwt = false
+
+[functions.import-csv]
+verify_jwt = false
