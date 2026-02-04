@@ -13,6 +13,7 @@ interface AddTransactionSheetProps {
   isOpen: boolean;
   onClose: () => void;
   onAdd: (transaction: NewTransaction) => void;
+  householdId: string;
 }
 
 const paymentMethods = [
@@ -22,7 +23,7 @@ const paymentMethods = [
   { id: "cash", label: "Dinheiro" },
 ] as const;
 
-export function AddTransactionSheet({ isOpen, onClose, onAdd }: AddTransactionSheetProps) {
+export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: AddTransactionSheetProps) {
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState<CategoryType>("other");
@@ -41,11 +42,11 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd }: AddTransactionSh
   const { toast } = useToast();
 
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && householdId) {
       loadFamilyMembers();
       setManualCategorySet(false);
     }
-  }, [isOpen]);
+  }, [isOpen, householdId]);
 
   // Auto-categorize when description changes
   useEffect(() => {
@@ -86,8 +87,9 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd }: AddTransactionSh
   };
 
   const loadFamilyMembers = async () => {
+    if (!householdId) return;
     try {
-      const members = await getFamilyMembers();
+      const members = await getFamilyMembers(householdId);
       setFamilyMembers(members);
     } catch (error) {
       console.error("Error loading family members:", error);

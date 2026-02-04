@@ -11,10 +11,11 @@ import { UpgradeModal } from "@/components/paywall/UpgradeModal";
 interface ReceiptScannerProps {
   isOpen: boolean;
   onClose: () => void;
-  onTransactionAdded: () => void;
+  onTransactionAdded?: () => void;
+  householdId: string;
 }
 
-export function ReceiptScanner({ isOpen, onClose, onTransactionAdded }: ReceiptScannerProps) {
+export function ReceiptScanner({ isOpen, onClose, onTransactionAdded, householdId }: ReceiptScannerProps) {
   const [isScanning, setIsScanning] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [extractedData, setExtractedData] = useState<ExtractedReceipt | null>(null);
@@ -23,7 +24,7 @@ export function ReceiptScanner({ isOpen, onClose, onTransactionAdded }: ReceiptS
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
-  const { canUseOCR, planType } = useHousehold();
+  const { canUseOCR } = useHousehold();
 
   const handleFileSelect = async (file: File) => {
     // Check if OCR is allowed (PRO only)
@@ -122,7 +123,7 @@ export function ReceiptScanner({ isOpen, onClose, onTransactionAdded }: ReceiptS
     setShowReview(false);
     resetScanner();
     onClose();
-    onTransactionAdded();
+    onTransactionAdded?.();
   };
 
   return (
@@ -259,6 +260,7 @@ export function ReceiptScanner({ isOpen, onClose, onTransactionAdded }: ReceiptS
           onClose={handleReviewClose}
           extractedData={extractedData}
           onSave={handleTransactionSaved}
+          householdId={householdId}
         />
       )}
 

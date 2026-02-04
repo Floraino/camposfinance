@@ -25,6 +25,7 @@ interface ReceiptReviewSheetProps {
   onClose: () => void;
   extractedData: ExtractedReceipt;
   onSave: () => void;
+  householdId: string;
 }
 
 const categoryOptions: { value: CategoryType; label: string }[] = [
@@ -45,7 +46,7 @@ const paymentOptions = [
   { value: "boleto", label: "Boleto" },
 ];
 
-export function ReceiptReviewSheet({ isOpen, onClose, extractedData, onSave }: ReceiptReviewSheetProps) {
+export function ReceiptReviewSheet({ isOpen, onClose, extractedData, onSave, householdId }: ReceiptReviewSheetProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     description: extractedData.description,
@@ -80,7 +81,7 @@ export function ReceiptReviewSheet({ isOpen, onClose, extractedData, onSave }: R
   };
 
   const handleSubmit = async () => {
-    if (!formData.description || formData.amount <= 0) {
+    if (!formData.description || formData.amount <= 0 || !householdId) {
       toast({
         title: "Dados inválidos",
         description: "Preencha a descrição e o valor",
@@ -91,7 +92,7 @@ export function ReceiptReviewSheet({ isOpen, onClose, extractedData, onSave }: R
 
     setIsSubmitting(true);
     try {
-      await addTransaction({
+      await addTransaction(householdId, {
         description: formData.description,
         amount: -Math.abs(formData.amount), // Expenses are negative
         category: formData.category,

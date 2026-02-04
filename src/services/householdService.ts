@@ -76,43 +76,24 @@ export async function getHousehold(id: string): Promise<Household | null> {
   return data;
 }
 
-// Create a new household
+// Create a new household using the atomic function (prevents race conditions and RLS issues)
 export async function createHousehold(name: string): Promise<Household> {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error("Usuário não autenticado");
+  const { data, error } = await supabase
+    .rpc("create_household_with_owner", { _name: name });
 
-  // Create the household
-  const { data: household, error: householdError } = await supabase
-    .from("households")
-    .insert({ name, created_by: user.id })
-    .select()
-    .single();
+  if (error) throw error;
 
-  if (householdError) throw householdError;
+  const result = data as unknown as { success: boolean; household?: Household; error?: string };
+  
+  if (!result.success) {
+    throw new Error(result.error || "Erro ao criar família");
+  }
 
-  // Add user as owner
-  const { error: memberError } = await supabase
-    .from("household_members")
-    .insert({
-      household_id: household.id,
-      user_id: user.id,
-      role: "owner",
-    });
+  if (!result.household) {
+    throw new Error("Família não foi criada corretamente");
+  }
 
-  if (memberError) throw memberError;
-
-  // Create BASIC plan for the household
-  const { error: planError } = await supabase
-    .from("household_plans")
-    .insert({
-      household_id: household.id,
-      plan: "BASIC",
-      status: "active",
-    });
-
-  if (planError) throw planError;
-
-  return household;
+  return result.household;
 }
 
 // Update household name
@@ -238,6 +219,10 @@ export async function updateMemberRole(
 
 // Get household accounts
 export async function getHouseholdAccounts(householdId: string): Promise<Account[]> {
+  if (!householdId) {
+    throw new Error("householdId é obrigatório para listar contas");
+  }
+
   const { data, error } = await supabase
     .from("accounts")
     .select("*")
@@ -254,6 +239,10 @@ export async function createAccount(
   householdId: string,
   account: { name: string; type?: string; color?: string; icon?: string }
 ): Promise<Account> {
+  if (!householdId) {
+    throw new Error("householdId é obrigatório para criar conta");
+  }
+
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Usuário não autenticado");
 
@@ -277,12 +266,18 @@ export async function createAccount(
 // Update account
 export async function updateAccount(
   id: string,
+  householdId: string,
   updates: { name?: string; type?: string; color?: string; icon?: string; balance?: number }
 ): Promise<Account> {
+  if (!householdId) {
+    throw new Error("householdId é obrigatório para atualizar conta");
+  }
+
   const { data, error } = await supabase
     .from("accounts")
     .update(updates)
     .eq("id", id)
+    .eq("household_id", householdId)
     .select()
     .single();
 
@@ -291,17 +286,26 @@ export async function updateAccount(
 }
 
 // Delete account (soft delete)
-export async function deleteAccount(id: string): Promise<void> {
+export async function deleteAccount(id: string, householdId: string): Promise<void> {
+  if (!householdId) {
+    throw new Error("householdId é obrigatório para deletar conta");
+  }
+
   const { error } = await supabase
     .from("accounts")
     .update({ is_active: false })
-    .eq("id", id);
+    .eq("id", id)
+    .eq("household_id", householdId);
 
   if (error) throw error;
 }
 
 // Count active accounts
 export async function countAccounts(householdId: string): Promise<number> {
+  if (!householdId) {
+    throw new Error("householdId é obrigatório para contar contas");
+  }
+
   const { count, error } = await supabase
     .from("accounts")
     .select("*", { count: "exact", head: true })
