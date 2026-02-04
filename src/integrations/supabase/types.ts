@@ -14,6 +14,56 @@ export type Database = {
   }
   public: {
     Tables: {
+      accounts: {
+        Row: {
+          balance: number
+          color: string | null
+          created_at: string
+          created_by: string
+          household_id: string
+          icon: string | null
+          id: string
+          is_active: boolean
+          name: string
+          type: string
+          updated_at: string
+        }
+        Insert: {
+          balance?: number
+          color?: string | null
+          created_at?: string
+          created_by: string
+          household_id: string
+          icon?: string | null
+          id?: string
+          is_active?: boolean
+          name: string
+          type?: string
+          updated_at?: string
+        }
+        Update: {
+          balance?: number
+          color?: string | null
+          created_at?: string
+          created_by?: string
+          household_id?: string
+          icon?: string | null
+          id?: string
+          is_active?: boolean
+          name?: string
+          type?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "accounts_household_id_fkey"
+            columns: ["household_id"]
+            isOneToOne: false
+            referencedRelation: "households"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       budgets: {
         Row: {
           amount: number
@@ -110,6 +160,118 @@ export type Database = {
         }
         Relationships: []
       }
+      household_members: {
+        Row: {
+          created_at: string
+          household_id: string
+          id: string
+          invited_by: string | null
+          joined_at: string
+          role: Database["public"]["Enums"]["household_role"]
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          household_id: string
+          id?: string
+          invited_by?: string | null
+          joined_at?: string
+          role?: Database["public"]["Enums"]["household_role"]
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          household_id?: string
+          id?: string
+          invited_by?: string | null
+          joined_at?: string
+          role?: Database["public"]["Enums"]["household_role"]
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "household_members_household_id_fkey"
+            columns: ["household_id"]
+            isOneToOne: false
+            referencedRelation: "households"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      household_plans: {
+        Row: {
+          created_at: string
+          expires_at: string | null
+          household_id: string
+          id: string
+          plan: Database["public"]["Enums"]["plan_type"]
+          started_at: string
+          status: Database["public"]["Enums"]["plan_status"]
+          stripe_customer_id: string | null
+          stripe_subscription_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at?: string | null
+          household_id: string
+          id?: string
+          plan?: Database["public"]["Enums"]["plan_type"]
+          started_at?: string
+          status?: Database["public"]["Enums"]["plan_status"]
+          stripe_customer_id?: string | null
+          stripe_subscription_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string | null
+          household_id?: string
+          id?: string
+          plan?: Database["public"]["Enums"]["plan_type"]
+          started_at?: string
+          status?: Database["public"]["Enums"]["plan_status"]
+          stripe_customer_id?: string | null
+          stripe_subscription_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "household_plans_household_id_fkey"
+            columns: ["household_id"]
+            isOneToOne: true
+            referencedRelation: "households"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      households: {
+        Row: {
+          created_at: string
+          created_by: string
+          id: string
+          name: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by: string
+          id?: string
+          name: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          id?: string
+          name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           avatar_url: string | null
@@ -139,10 +301,13 @@ export type Database = {
       }
       transactions: {
         Row: {
+          account_id: string | null
           amount: number
+          attachments: string[] | null
           category: string
           created_at: string
           description: string
+          household_id: string | null
           id: string
           is_recurring: boolean
           member_id: string | null
@@ -154,10 +319,13 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          account_id?: string | null
           amount: number
+          attachments?: string[] | null
           category?: string
           created_at?: string
           description: string
+          household_id?: string | null
           id?: string
           is_recurring?: boolean
           member_id?: string | null
@@ -169,10 +337,13 @@ export type Database = {
           user_id: string
         }
         Update: {
+          account_id?: string | null
           amount?: number
+          attachments?: string[] | null
           category?: string
           created_at?: string
           description?: string
+          household_id?: string | null
           id?: string
           is_recurring?: boolean
           member_id?: string | null
@@ -184,6 +355,20 @@ export type Database = {
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "transactions_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transactions_household_id_fkey"
+            columns: ["household_id"]
+            isOneToOne: false
+            referencedRelation: "households"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "transactions_member_id_fkey"
             columns: ["member_id"]
@@ -225,10 +410,29 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      can_create_account: { Args: { _household_id: string }; Returns: boolean }
+      can_use_ocr: { Args: { _household_id: string }; Returns: boolean }
+      count_household_accounts: {
+        Args: { _household_id: string }
+        Returns: number
+      }
+      get_household_plan: {
+        Args: { _household_id: string }
+        Returns: Database["public"]["Enums"]["plan_type"]
+      }
+      is_household_admin: {
+        Args: { _household_id: string; _user_id: string }
+        Returns: boolean
+      }
+      is_household_member: {
+        Args: { _household_id: string; _user_id: string }
+        Returns: boolean
+      }
     }
     Enums: {
-      [_ in never]: never
+      household_role: "owner" | "admin" | "member"
+      plan_status: "active" | "cancelled" | "expired" | "trial"
+      plan_type: "BASIC" | "PRO"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -355,6 +559,10 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      household_role: ["owner", "admin", "member"],
+      plan_status: ["active", "cancelled", "expired", "trial"],
+      plan_type: ["BASIC", "PRO"],
+    },
   },
 } as const
