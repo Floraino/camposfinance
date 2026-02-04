@@ -8,22 +8,34 @@ export interface ColumnMapping {
   confidence: number;
 }
 
+export interface RowAnalysis {
+  rowIndex: number;
+  status: "OK" | "SKIPPED" | "ERROR";
+  reason?: string;
+}
+
 export interface CSVAnalysis {
   separator: string;
   encoding: string;
   dateFormat: string;
   currencyFormat: string;
   hasHeader: boolean;
+  hasEntradaSaida: boolean;
   columnMappings: ColumnMapping[];
   sampleRows: Record<string, string>[];
+  rowAnalysis: RowAnalysis[];
 }
+
+export type ParsedRowStatus = "OK" | "SKIPPED" | "ERROR";
 
 export interface ParsedRow {
   rowIndex: number;
   raw: string;
+  status: ParsedRowStatus;
   parsed: {
     description: string;
     amount: number;
+    type: "INCOME" | "EXPENSE";
     category: CategoryType;
     payment_method: "pix" | "boleto" | "card" | "cash";
     status: "paid" | "pending";
@@ -32,6 +44,7 @@ export interface ParsedRow {
     import_hash?: string;
   } | null;
   errors: string[];
+  reason?: string; // Human-readable reason for SKIPPED/ERROR
   isDuplicate?: boolean;
 }
 
@@ -67,6 +80,9 @@ const categoryMapping: Record<string, CategoryType> = {
   "entertainment": "leisure", "health": "health", "education": "education",
   "shopping": "shopping", "bills": "bills", "leisure": "leisure",
   "outros": "other", "outro": "other", "other": "other",
+  // Income-related
+  "salário": "other", "salario": "other", "renda": "other",
+  "pix recebido": "other", "transferência recebida": "other",
 };
 
 const paymentMapping: Record<string, "pix" | "boleto" | "card" | "cash"> = {
@@ -78,12 +94,38 @@ const paymentMapping: Record<string, "pix" | "boleto" | "card" | "cash"> = {
   "espécie": "cash", "especie": "cash",
 };
 
+// Patterns to detect non-transaction lines
+const NON_TRANSACTION_PATTERNS = [
+  /^ag[êe]ncia\s*[:\/-]/i,
+  /^conta\s*[:\/-]/i,
+  /^extrato\s+(gerado|de|para)/i,
+  /^per[íi]odo\s*[:\/-]/i,
+  /^saldo\s+(anterior|inicial|final)/i,
+  /^data\s+de\s+(emiss[ãa]o|gera[çc][ãa]o)/i,
+  /^cliente\s*[:\/-]/i,
+  /^cpf\s*[:\/-]/i,
+  /^cnpj\s*[:\/-]/i,
+  /^total\s+(do\s+per[íi]odo|geral)/i,
+  /^(resumo|totais|consolidado)/i,
+];
+
+const HEADER_PATTERNS = [
+  /^data$/i,
+  /^descri[çc][ãa]o$/i,
+  /^valor$/i,
+  /^entrada\s*\(?\s*r?\$?\s*\)?$/i,
+  /^sa[íi]da\s*\(?\s*r?\$?\s*\)?$/i,
+  /^saldo\s*\(?\s*r?\$?\s*\)?$/i,
+  /^hist[óo]rico$/i,
+  /^lan[çc]amento$/i,
+];
+
 /**
  * Analyze CSV content using AI
  */
 export async function analyzeCSV(csvContent: string): Promise<CSVAnalysis> {
   const { data, error } = await supabase.functions.invoke("analyze-csv", {
-    body: { csvContent, sampleSize: 30 },
+    body: { csvContent, sampleSize: 50 },
   });
 
   if (error) {
@@ -107,6 +149,11 @@ export function parseLocalizedNumber(value: string | number | null): number | nu
 
   let str = String(value).trim();
   
+  // Check if it looks like a header value (text instead of number)
+  if (/^[a-zA-ZçÇãÃõÕáÁéÉíÍóÓúÚ\s()$]+$/.test(str)) {
+    return null; // This is text, not a number
+  }
+  
   // Handle parentheses as negative
   const isNegativeParens = str.startsWith("(") && str.endsWith(")");
   if (isNegativeParens) {
@@ -115,6 +162,9 @@ export function parseLocalizedNumber(value: string | number | null): number | nu
 
   // Remove currency symbols and spaces
   str = str.replace(/[R$€£¥\s]/gi, "");
+
+  // If empty after cleanup, return null
+  if (!str || str === "-") return null;
 
   // Detect format by analyzing position of comma and dot
   const lastComma = str.lastIndexOf(",");
@@ -242,14 +292,62 @@ export function generateImportHash(date: string, amount: number, description: st
 }
 
 /**
+ * Check if a line is a non-transaction line (header, informational, etc.)
+ */
+function isNonTransactionLine(cells: string[], rawLine: string): { skip: boolean; reason?: string } {
+  const joinedCells = cells.join(" ").trim();
+  const nonEmptyCells = cells.filter(c => c.trim() !== "");
+  
+  // Empty line
+  if (nonEmptyCells.length === 0) {
+    return { skip: true, reason: "Linha vazia" };
+  }
+  
+  // Check against patterns
+  for (const pattern of NON_TRANSACTION_PATTERNS) {
+    if (pattern.test(joinedCells) || pattern.test(rawLine)) {
+      return { skip: true, reason: "Linha informativa do extrato" };
+    }
+  }
+  
+  // Check if it's a header row
+  const headerMatches = cells.filter(c => 
+    HEADER_PATTERNS.some(p => p.test(c.trim()))
+  );
+  if (headerMatches.length >= 2 && headerMatches.length >= nonEmptyCells.length * 0.5) {
+    return { skip: true, reason: "Linha de cabeçalho" };
+  }
+  
+  // Very short line with no numbers
+  if (nonEmptyCells.length === 1 && !/\d/.test(nonEmptyCells[0])) {
+    return { skip: true, reason: "Linha sem dados de transação" };
+  }
+  
+  return { skip: false };
+}
+
+function isLikelyAmount(str: string): boolean {
+  const cleaned = str.replace(/[R$\s]/g, "").trim();
+  return /^-?\d{1,3}([.,]\d{3})*([.,]\d{1,2})?$/.test(cleaned) ||
+         /^-?\d+([.,]\d{1,2})?$/.test(cleaned);
+}
+
+function isLikelyDate(str: string): boolean {
+  return /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(str.trim()) ||
+         /^\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}$/.test(str.trim());
+}
+
+/**
  * Parse CSV content into rows with the given column mappings
+ * Now supports Entrada/Saída columns and proper INCOME/EXPENSE typing
  */
 export function parseCSVWithMappings(
   csvContent: string,
   mappings: ColumnMapping[],
   separator: string,
   hasHeader: boolean,
-  dateFormat?: string
+  dateFormat?: string,
+  hasEntradaSaida?: boolean
 ): ParsedRow[] {
   const lines = csvContent.split(/\r?\n/).filter(l => l.trim());
   const startIndex = hasHeader ? 1 : 0;
@@ -260,9 +358,29 @@ export function parseCSVWithMappings(
     mappingByField[m.internalField] = m;
   }
 
+  // Check if we have entrada/saida mappings
+  const entradaCol = mappingByField["entrada"];
+  const saidaCol = mappingByField["saida"];
+  const hasEntradaSaidaMappings = !!entradaCol || !!saidaCol;
+
   for (let i = startIndex; i < lines.length; i++) {
     const line = lines[i];
     const cells = line.split(separator).map(c => c.trim().replace(/^["']|["']$/g, ""));
+    
+    // Check if this is a non-transaction line
+    const skipCheck = isNonTransactionLine(cells, line);
+    if (skipCheck.skip) {
+      results.push({
+        rowIndex: i + 1,
+        raw: line,
+        status: "SKIPPED",
+        parsed: null,
+        errors: [],
+        reason: skipCheck.reason,
+      });
+      continue;
+    }
+    
     const errors: string[] = [];
 
     // Get values from mapped columns
@@ -287,11 +405,49 @@ export function parseCSVWithMappings(
     }
     if (!description) description = "Transação importada";
 
-    // Parse amount
-    const amountStr = amountCol ? cells[amountCol.csvIndex] : "";
-    const amount = parseLocalizedNumber(amountStr);
-    if (amount === null) {
-      errors.push(`Valor inválido: "${amountStr}"`);
+    // Parse amount and determine type (INCOME/EXPENSE)
+    let amount: number | null = null;
+    let transactionType: "INCOME" | "EXPENSE" = "EXPENSE";
+
+    if (hasEntradaSaidaMappings) {
+      // Handle separate Entrada/Saída columns
+      const entradaStr = entradaCol ? cells[entradaCol.csvIndex] || "" : "";
+      const saidaStr = saidaCol ? cells[saidaCol.csvIndex] || "" : "";
+      
+      const entradaValue = parseLocalizedNumber(entradaStr);
+      const saidaValue = parseLocalizedNumber(saidaStr);
+      
+      if (entradaValue !== null && entradaValue !== 0) {
+        // This is income (entrada)
+        amount = Math.abs(entradaValue);
+        transactionType = "INCOME";
+      } else if (saidaValue !== null && saidaValue !== 0) {
+        // This is expense (saída)
+        amount = Math.abs(saidaValue);
+        transactionType = "EXPENSE";
+      } else {
+        // Both are empty or zero
+        errors.push("Entrada e Saída vazias");
+      }
+    } else {
+      // Single amount column
+      const amountStr = amountCol ? cells[amountCol.csvIndex] : "";
+      amount = parseLocalizedNumber(amountStr);
+      
+      if (amount !== null) {
+        // Determine type by sign
+        if (amount > 0) {
+          transactionType = "INCOME";
+          amount = Math.abs(amount);
+        } else {
+          transactionType = "EXPENSE";
+          amount = Math.abs(amount);
+        }
+      } else if (amountStr) {
+        errors.push(`Valor inválido: "${amountStr}"`);
+      } else {
+        errors.push("Valor não encontrado");
+      }
     }
 
     // Parse date
@@ -299,33 +455,40 @@ export function parseCSVWithMappings(
     let transaction_date = parseDate(dateStr, dateFormat);
     if (!transaction_date) {
       transaction_date = formatDateISO(new Date()); // Default to today
-      if (dateStr) {
+      if (dateStr && dateStr.trim()) {
         errors.push(`Data não reconhecida: "${dateStr}" (usando data atual)`);
       }
     }
 
     // Parse category
     const categoryStr = categoryCol ? cells[categoryCol.csvIndex]?.toLowerCase() : "";
-    let category: CategoryType = categoryMapping[categoryStr] || inferCategory(description);
+    const category: CategoryType = categoryMapping[categoryStr] || inferCategory(description);
 
     // Parse payment method
     const paymentStr = paymentCol ? cells[paymentCol.csvIndex]?.toLowerCase() : "";
-    let payment_method = paymentMapping[paymentStr] || inferPaymentMethod(description);
+    const payment_method = paymentMapping[paymentStr] || inferPaymentMethod(description);
 
     // Notes
     const notes = notesCol ? cells[notesCol.csvIndex] : undefined;
 
-    if (amount !== null && errors.filter(e => !e.includes("data atual")).length === 0) {
-      // Determine if expense or income based on sign
-      // Most bank CSVs use negative for expenses
-      const finalAmount = amount > 0 ? -Math.abs(amount) : amount;
+    // Determine final status
+    const criticalErrors = errors.filter(e => 
+      !e.includes("data atual") && 
+      e !== "Entrada e Saída vazias"
+    );
+
+    if (amount !== null && amount !== 0 && criticalErrors.length === 0) {
+      // For expense, store as negative amount in the database (consistent with existing logic)
+      const finalAmount = transactionType === "EXPENSE" ? -Math.abs(amount) : Math.abs(amount);
 
       results.push({
         rowIndex: i + 1,
         raw: line,
+        status: "OK",
         parsed: {
           description: description.substring(0, 255),
           amount: finalAmount,
+          type: transactionType,
           category,
           payment_method,
           status: "paid",
@@ -333,30 +496,30 @@ export function parseCSVWithMappings(
           notes: notes?.substring(0, 500),
           import_hash: generateImportHash(transaction_date, finalAmount, description),
         },
-        errors: errors.filter(e => e.includes("data atual")).length > 0 ? errors : [],
+        errors: errors.filter(e => e.includes("data atual")),
+      });
+    } else if (errors.includes("Entrada e Saída vazias")) {
+      results.push({
+        rowIndex: i + 1,
+        raw: line,
+        status: "SKIPPED",
+        parsed: null,
+        errors: [],
+        reason: "Entrada e Saída vazias",
       });
     } else {
       results.push({
         rowIndex: i + 1,
         raw: line,
+        status: "ERROR",
         parsed: null,
         errors: errors.length > 0 ? errors : ["Não foi possível processar esta linha"],
+        reason: errors.length > 0 ? errors[0] : "Dados inválidos",
       });
     }
   }
 
   return results;
-}
-
-function isLikelyAmount(str: string): boolean {
-  const cleaned = str.replace(/[R$\s]/g, "").trim();
-  return /^-?\d{1,3}([.,]\d{3})*([.,]\d{1,2})?$/.test(cleaned) ||
-         /^-?\d+([.,]\d{1,2})?$/.test(cleaned);
-}
-
-function isLikelyDate(str: string): boolean {
-  return /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(str.trim()) ||
-         /^\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}$/.test(str.trim());
 }
 
 /**
@@ -368,14 +531,14 @@ export async function importTransactions(
   skipDuplicates = true
 ): Promise<ImportResult> {
   const validTransactions = transactions
-    .filter(t => t.parsed !== null)
+    .filter(t => t.parsed !== null && t.status === "OK")
     .map(t => t.parsed);
 
   if (validTransactions.length === 0) {
     return {
       imported: 0,
       duplicates: 0,
-      failed: transactions.length,
+      failed: transactions.filter(t => t.status === "ERROR").length,
       errors: [{ row: 0, reason: "Nenhuma transação válida para importar" }],
     };
   }
