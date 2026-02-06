@@ -19,6 +19,7 @@ import HouseholdSelection from "./pages/HouseholdSelection";
 import Splits from "./pages/Splits";
 import Timeline from "./pages/Timeline";
 import CreditCardsPage from "./pages/CreditCards";
+import Settlements from "./pages/Settlements";
 import Subscribe from "./pages/Subscribe";
 import NotFound from "./pages/NotFound";
 import AdminDashboard from "./pages/admin/AdminDashboard";
@@ -180,6 +181,14 @@ const AppRoutes = () => (
       element={
         <ProtectedRoute>
           <CreditCardsPage />
+        </ProtectedRoute>
+      }
+    />
+    <Route
+      path="/settlements"
+      element={
+        <ProtectedRoute>
+          <Settlements />
         </ProtectedRoute>
       }
     />

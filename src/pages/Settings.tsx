@@ -466,6 +466,21 @@ export default function Settings() {
                 </div>
                 <ChevronRight className="w-5 h-5 text-muted-foreground" />
               </button>
+              <button 
+                onClick={() => navigate("/settlements")}
+                className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors border-t border-border"
+              >
+                <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
+                  <Users className="w-5 h-5 text-muted-foreground" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-foreground">Acertos da Casa</p>
+                  <p className="text-sm text-muted-foreground truncate">
+                    Quem deve o quê
+                  </p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-muted-foreground" />
+              </button>
             </div>
           </div>
 
