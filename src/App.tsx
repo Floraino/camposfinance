@@ -17,6 +17,7 @@ import Settings from "./pages/Settings";
 import Auth from "./pages/Auth";
 import HouseholdSelection from "./pages/HouseholdSelection";
 import Splits from "./pages/Splits";
+import Timeline from "./pages/Timeline";
 import Subscribe from "./pages/Subscribe";
 import NotFound from "./pages/NotFound";
 import AdminDashboard from "./pages/admin/AdminDashboard";
@@ -162,6 +163,14 @@ const AppRoutes = () => (
       element={
         <ProtectedRoute>
           <Transactions />
+        </ProtectedRoute>
+      }
+    />
+    <Route
+      path="/timeline"
+      element={
+        <ProtectedRoute>
+          <Timeline />
         </ProtectedRoute>
       }
     />

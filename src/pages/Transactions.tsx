@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Search, Filter, ChevronDown, Loader2, Trash2, X, CheckSquare } from "lucide-react";
+import { Search, Filter, ChevronDown, Loader2, Trash2, X, CheckSquare, CalendarDays } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { MobileLayout } from "@/components/layout/MobileLayout";
 import { TransactionCard, type Transaction as UITransaction } from "@/components/transactions/TransactionCard";
@@ -190,6 +190,16 @@ export default function Transactions() {
                 Total: <span className="text-destructive font-semibold">{formatCurrency(totalFiltered)}</span>
               </p>
             </div>
+            <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => navigate("/timeline")}
+              className="gap-1.5"
+            >
+              <CalendarDays className="w-4 h-4" />
+              Timeline
+            </Button>
             <Button
               variant={selectMode ? "default" : "outline"}
               size="sm"
@@ -199,6 +209,7 @@ export default function Transactions() {
               {selectMode ? <X className="w-4 h-4" /> : <CheckSquare className="w-4 h-4" />}
               {selectMode ? "Cancelar" : "Selecionar"}
             </Button>
+            </div>
           </div>
         </header>
 
