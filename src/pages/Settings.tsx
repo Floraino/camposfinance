@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { ChevronRight, Moon, Bell, Shield, Users, Download, Upload, HelpCircle, LogOut, User, Camera, X, Loader2, Crown, Home, Wallet, RefreshCw, Split, Zap, Target, AlertTriangle } from "lucide-react";
+import { ChevronRight, Moon, Bell, Shield, Users, Download, Upload, HelpCircle, LogOut, User, Camera, X, Loader2, Crown, Home, Wallet, RefreshCw, Split, Zap, Target, AlertTriangle, CreditCard } from "lucide-react";
 import { MobileLayout } from "@/components/layout/MobileLayout";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
@@ -417,6 +417,21 @@ export default function Settings() {
                   <p className="font-medium text-foreground">Contas</p>
                   <p className="text-sm text-muted-foreground truncate">
                     Carteiras e bancos ({planType === "PRO" ? "ilimitado" : "até 2"})
+                  </p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-muted-foreground" />
+              </button>
+              <button 
+                onClick={() => navigate("/credit-cards")}
+                className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors border-t border-border"
+              >
+                <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
+                  <CreditCard className="w-5 h-5 text-muted-foreground" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-foreground">Cartões de Crédito</p>
+                  <p className="text-sm text-muted-foreground truncate">
+                    Gerenciar cartões e faturas
                   </p>
                 </div>
                 <ChevronRight className="w-5 h-5 text-muted-foreground" />

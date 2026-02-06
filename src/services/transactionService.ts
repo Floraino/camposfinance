@@ -13,6 +13,9 @@ export interface Transaction {
   is_recurring: boolean;
   transaction_date: string;
   due_date?: string | null; // v2: vencimento para boletos/contas
+  credit_card_id?: string | null; // v3: cartão de crédito
+  installment_group_id?: string | null; // v4: parcelamento
+  installment_number?: number | null; // v4: nº da parcela (1, 2, 3...)
   notes: string | null;
   member_id: string | null;
   member_name?: string;

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { CategoryBadge, categoryConfig, type CategoryType } from "@/components/ui/CategoryBadge";
 import { cn } from "@/lib/utils";
 import { type NewTransaction } from "@/services/transactionService";
+import { createInstallmentPurchase } from "@/services/installmentService";
 import { getFamilyMembers, type FamilyMember } from "@/services/familyService";
 import { categorizeDescription } from "@/services/categorizationService";
 import { supabase } from "@/integrations/supabase/client";
@@ -33,6 +34,8 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
   const [status, setStatus] = useState<"paid" | "pending">("paid");
   const [isRecurring, setIsRecurring] = useState(false);
   const [dueDate, setDueDate] = useState<string>("");
+  const [isInstallment, setIsInstallment] = useState(false);
+  const [installmentCount, setInstallmentCount] = useState("2");
   const [isScanning, setIsScanning] = useState(false);
   const [isCategorizing, setIsCategorizing] = useState(false);
   const [memberId, setMemberId] = useState<string | undefined>(undefined);
@@ -226,19 +229,43 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
     // Form is already open, user can fill manually
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!description || !amount) return;
 
-    onAdd({
-      description,
-      amount: -Math.abs(parseFloat(amount.replace(",", "."))),
-      category,
-      payment_method: paymentMethod,
-      status,
-      is_recurring: isRecurring,
-      member_id: memberId,
-      ...(dueDate ? { due_date: dueDate } : {}),
-    });
+    const parsedAmount = Math.abs(parseFloat(amount.replace(",", ".")));
+
+    // Handle installment purchase
+    if (isInstallment && parseInt(installmentCount) >= 2) {
+      try {
+        const now = new Date();
+        const startMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+        await createInstallmentPurchase(householdId, {
+          description,
+          totalAmount: parsedAmount,
+          installmentCount: parseInt(installmentCount),
+          startMonth,
+          category,
+          memberId,
+        });
+        toast({ title: `Parcelamento criado: ${installmentCount}x` });
+      } catch (err) {
+        console.error("[installment] create error:", err);
+        toast({ title: "Erro ao criar parcelamento", variant: "destructive" });
+        return;
+      }
+    } else {
+      // Normal single transaction
+      onAdd({
+        description,
+        amount: -parsedAmount,
+        category,
+        payment_method: paymentMethod,
+        status,
+        is_recurring: isRecurring,
+        member_id: memberId,
+        ...(dueDate ? { due_date: dueDate } : {}),
+      });
+    }
 
     // Reset form
     setDescription("");
@@ -247,6 +274,8 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
     setPaymentMethod("pix");
     setStatus("paid");
     setIsRecurring(false);
+    setIsInstallment(false);
+    setInstallmentCount("2");
     setDueDate("");
     setMemberId(undefined);
     setManualCategorySet(false);
@@ -544,6 +573,64 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
               isRecurring && "rotate-90"
             )} />
           </button>
+
+          {/* Installment Toggle */}
+          <button
+            onClick={() => setIsInstallment(!isInstallment)}
+            className={cn(
+              "w-full flex items-center justify-between p-4 rounded-xl border-2 transition-all duration-200",
+              isInstallment
+                ? "border-primary bg-primary/10"
+                : "border-border bg-muted/50"
+            )}
+          >
+            <span className={cn(
+              "font-medium",
+              isInstallment ? "text-primary" : "text-muted-foreground"
+            )}>
+              💳 Parcelado
+            </span>
+            <ChevronRight className={cn(
+              "w-5 h-5 transition-transform",
+              isInstallment && "rotate-90"
+            )} />
+          </button>
+
+          {isInstallment && (
+            <div className="pl-4 space-y-3">
+              <div>
+                <label className="text-sm font-medium text-muted-foreground mb-2 block">
+                  Número de parcelas
+                </label>
+                <div className="flex gap-2 flex-wrap">
+                  {["2", "3", "4", "5", "6", "8", "10", "12"].map((n) => (
+                    <button
+                      key={n}
+                      onClick={() => setInstallmentCount(n)}
+                      className={cn(
+                        "px-3 py-2 rounded-xl border-2 text-sm font-medium transition-all",
+                        installmentCount === n
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border bg-muted/50 text-muted-foreground"
+                      )}
+                    >
+                      {n}x
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {amount && (
+                <p className="text-sm text-muted-foreground">
+                  {installmentCount}x de{" "}
+                  <span className="font-semibold text-foreground">
+                    {new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
+                      Math.abs(parseFloat(amount.replace(",", ".")) || 0) / parseInt(installmentCount)
+                    )}
+                  </span>
+                </p>
+              )}
+            </div>
+          )}
           
           {/* Submit Button */}
           <Button 

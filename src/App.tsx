@@ -18,6 +18,7 @@ import Auth from "./pages/Auth";
 import HouseholdSelection from "./pages/HouseholdSelection";
 import Splits from "./pages/Splits";
 import Timeline from "./pages/Timeline";
+import CreditCardsPage from "./pages/CreditCards";
 import Subscribe from "./pages/Subscribe";
 import NotFound from "./pages/NotFound";
 import AdminDashboard from "./pages/admin/AdminDashboard";
@@ -171,6 +172,14 @@ const AppRoutes = () => (
       element={
         <ProtectedRoute>
           <Timeline />
+        </ProtectedRoute>
+      }
+    />
+    <Route
+      path="/credit-cards"
+      element={
+        <ProtectedRoute>
+          <CreditCardsPage />
         </ProtectedRoute>
       }
     />
