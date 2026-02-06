@@ -3,7 +3,6 @@
   "appName": "Campos Finance",
   "webDir": "dist",
   "server": {
-    "url": "https://50885c5a-df93-4e91-a94a-fd5561fdfd52.lovableproject.com?forceHideBadge=true",
     "cleartext": true
   },
   "plugins": {

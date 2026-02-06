@@ -118,47 +118,82 @@ export function ReceiptScanner({ isOpen, onClose, onTransactionAdded, onContinue
   };
 
   const processImage = async (imageBase64: string, mimeType: string) => {
+    // Validate image size (max 4MB base64 ≈ 3MB file)
+    const MAX_BASE64_SIZE = 4 * 1024 * 1024;
+    if (imageBase64.length > MAX_BASE64_SIZE) {
+      toast({
+        title: "Imagem muito grande",
+        description: "O tamanho máximo é 3MB. Tente uma imagem menor ou comprima antes de enviar.",
+        variant: "destructive",
+      });
+      resetScanner();
+      return;
+    }
+
+    // Validate mime type
+    const VALID_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"];
+    if (!VALID_MIME_TYPES.includes(mimeType)) {
+      toast({
+        title: "Formato não suportado",
+        description: `Use JPEG, PNG ou WebP. Formato recebido: ${mimeType}`,
+        variant: "destructive",
+      });
+      resetScanner();
+      return;
+    }
+
     setIsScanning(true);
+    console.log(`[OCR] Iniciando scan: size=${(imageBase64.length / 1024).toFixed(0)}KB, type=${mimeType}, household=${householdId}`);
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        toast({
-          title: "Sessão expirada",
-          description: "Por favor, faça login novamente",
-          variant: "destructive",
-        });
-        return;
-      }
+      const { data, error } = await supabase.functions.invoke("scan-receipt", {
+        body: { imageBase64, mimeType, householdId },
+      });
 
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/scan-receipt`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify({ imageBase64, mimeType, householdId }),
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        // Handle PRO_REQUIRED error specifically
-        if (data.code === "PRO_REQUIRED") {
+      if (error) {
+        console.error("[OCR] Edge function error:", error);
+        // Check for specific error codes in the response
+        const errorBody = typeof error === "object" && "context" in error 
+          ? (error as any).context 
+          : null;
+        
+        if (error.message?.includes("PRO_REQUIRED")) {
           setShowUpgradeModal(true);
           resetScanner();
           return;
         }
-        throw new Error(data.error || "Erro ao processar cupom");
+
+        // Provide helpful error messages based on common failure modes
+        let userMessage = "Tente novamente";
+        if (error.message?.includes("GEMINI_API_KEY") || error.message?.includes("AI_NOT_CONFIGURED")) {
+          userMessage = "Chave de IA (Gemini) não configurada no servidor. Contate o administrador.";
+        } else if (error.message?.includes("Supabase configuration")) {
+          userMessage = "Configuração do servidor incompleta. Contate o administrador.";
+        } else if (error.message?.includes("Edge Function")) {
+          userMessage = "Serviço de OCR indisponível. As Edge Functions podem não estar deployadas.";
+        } else if (error.message) {
+          userMessage = error.message;
+        }
+
+        throw new Error(userMessage);
       }
 
+      // Handle PRO_REQUIRED in response body
+      if (data?.code === "PRO_REQUIRED") {
+        setShowUpgradeModal(true);
+        resetScanner();
+        return;
+      }
+
+      if (data?.error) {
+        throw new Error(data.error);
+      }
+
+      console.log(`[OCR] Scan concluído: confidence=${data?.confidence}, amount=${data?.amount}`);
       setExtractedData(data);
       setShowReview(true);
     } catch (error) {
-      console.error("Error scanning receipt:", error);
+      console.error("[OCR] Error scanning receipt:", error);
       toast({
         title: "Erro ao ler cupom",
         description: error instanceof Error ? error.message : "Tente novamente",

@@ -33,8 +33,13 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
+const PAGE_SIZE = 20;
+const DELETE_CONFIRM_TEXT = "EXCLUIR";
+
 export default function AdminUsers() {
   const [users, setUsers] = useState<AdminUser[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);
   const [search, setSearch] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [selectedUser, setSelectedUser] = useState<AdminUser | null>(null);
@@ -42,43 +47,59 @@ export default function AdminUsers() {
   const [showConfirmAdmin, setShowConfirmAdmin] = useState(false);
   const [showConfirmBlock, setShowConfirmBlock] = useState(false);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
+  const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
   const [showEditName, setShowEditName] = useState(false);
   const [newDisplayName, setNewDisplayName] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const { toast } = useToast();
 
-  useEffect(() => {
-    loadUsers();
-  }, []);
-
-  const loadUsers = async (searchTerm?: string) => {
+  const loadUsers = async (searchTerm?: string, pageNum = 0) => {
     setIsLoading(true);
     try {
-      const data = await getAdminUsers(searchTerm);
+      const { data, total: totalCount } = await getAdminUsers(searchTerm, pageNum, PAGE_SIZE);
       setUsers(data);
+      setTotal(totalCount);
+      setPage(pageNum);
     } catch (error) {
       console.error("Error loading users:", error);
+      toast({ title: "Erro", description: "Falha ao carregar usuários", variant: "destructive" });
     } finally {
       setIsLoading(false);
     }
   };
 
+  useEffect(() => {
+    loadUsers();
+  }, []);
+
   const handleSearch = () => {
-    loadUsers(search || undefined);
+    loadUsers(search || undefined, 0);
+  };
+
+  const handlePagePrev = () => {
+    if (page > 0) loadUsers(search || undefined, page - 1);
+  };
+
+  const handlePageNext = () => {
+    if ((page + 1) * PAGE_SIZE < total) loadUsers(search || undefined, page + 1);
+  };
+
+  const refreshList = async () => {
+    const { data, total: totalCount } = await getAdminUsers(search || undefined, page, PAGE_SIZE);
+    setUsers(data);
+    setTotal(totalCount);
+    return data;
   };
 
   const handleToggleBlock = async () => {
     if (!selectedUser) return;
-    
     setIsProcessing(true);
     try {
       await setUserBlocked(selectedUser.user_id, !selectedUser.is_blocked);
       toast({
         title: selectedUser.is_blocked ? "Usuário desbloqueado" : "Usuário bloqueado",
       });
-      // Reload and update selected user
-      const freshData = await getAdminUsers(search || undefined);
-      setUsers(freshData);
+      const freshData = await refreshList();
       const updated = freshData.find(u => u.user_id === selectedUser.user_id);
       if (updated) setSelectedUser(updated);
       setShowConfirmBlock(false);
@@ -92,7 +113,6 @@ export default function AdminUsers() {
 
   const handleToggleAdmin = async () => {
     if (!selectedUser) return;
-    
     setIsProcessing(true);
     try {
       const newRole = selectedUser.role === "super_admin" ? "user" : "super_admin";
@@ -100,9 +120,7 @@ export default function AdminUsers() {
       toast({
         title: newRole === "super_admin" ? "Admin promovido" : "Admin revogado",
       });
-      // Reload and update selected user
-      const freshData = await getAdminUsers(search || undefined);
-      setUsers(freshData);
+      const freshData = await refreshList();
       const updated = freshData.find(u => u.user_id === selectedUser.user_id);
       if (updated) setSelectedUser(updated);
       setShowConfirmAdmin(false);
@@ -115,21 +133,20 @@ export default function AdminUsers() {
   };
 
   const handleDeleteUser = async () => {
-    if (!selectedUser) return;
-    
+    if (!selectedUser || deleteConfirmInput.trim() !== DELETE_CONFIRM_TEXT) return;
     setIsProcessing(true);
     try {
       await deleteUserProfile(selectedUser.user_id);
       toast({ title: "Usuário excluído", description: "Perfil e dados removidos." });
-      // Reload list after deletion
-      const freshData = await getAdminUsers(search || undefined);
-      setUsers(freshData);
+      setDeleteConfirmInput("");
       setShowConfirmDelete(false);
       setShowDetail(false);
       setSelectedUser(null);
+      await loadUsers(search || undefined, 0);
     } catch (error) {
       console.error("Error deleting user:", error);
-      toast({ title: "Erro", description: "Falha ao excluir usuário", variant: "destructive" });
+      const msg = error instanceof Error ? error.message : "Falha ao excluir usuário";
+      toast({ title: "Erro", description: msg, variant: "destructive" });
     } finally {
       setIsProcessing(false);
     }
@@ -137,14 +154,11 @@ export default function AdminUsers() {
 
   const handleUpdateDisplayName = async () => {
     if (!selectedUser || !newDisplayName.trim()) return;
-    
     setIsProcessing(true);
     try {
       await updateUserDisplayName(selectedUser.user_id, newDisplayName.trim());
       toast({ title: "Nome atualizado" });
-      // Reload and update selected user
-      const freshData = await getAdminUsers(search || undefined);
-      setUsers(freshData);
+      const freshData = await refreshList();
       const updated = freshData.find(u => u.user_id === selectedUser.user_id);
       if (updated) setSelectedUser(updated);
       setShowEditName(false);
@@ -154,6 +168,12 @@ export default function AdminUsers() {
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const openDetail = (user: AdminUser) => {
+    setSelectedUser(user);
+    setNewDisplayName(user.display_name);
+    setShowDetail(true);
   };
 
   return (
@@ -184,6 +204,11 @@ export default function AdminUsers() {
           </Button>
         </div>
 
+        {/* Total */}
+        <p className="text-sm text-muted-foreground">
+          {total === 0 && !isLoading ? "Nenhum usuário" : `${total} usuário${total !== 1 ? "s" : ""}`}
+        </p>
+
         {/* List */}
         {isLoading ? (
           <div className="flex justify-center py-8">
@@ -197,11 +222,7 @@ export default function AdminUsers() {
                 className={`p-4 cursor-pointer hover:bg-card/80 transition-colors ${
                   user.is_blocked ? "opacity-50" : ""
                 }`}
-                onClick={() => {
-                  setSelectedUser(user);
-                  setNewDisplayName(user.display_name);
-                  setShowDetail(true);
-                }}
+                onClick={() => openDetail(user)}
               >
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center overflow-hidden">
@@ -228,6 +249,26 @@ export default function AdminUsers() {
                 </div>
               </Card>
             ))}
+          </div>
+        )}
+
+        {/* Pagination */}
+        {!isLoading && total > PAGE_SIZE && (
+          <div className="flex items-center justify-between pt-2">
+            <Button variant="outline" size="sm" onClick={handlePagePrev} disabled={page === 0}>
+              Anterior
+            </Button>
+            <span className="text-sm text-muted-foreground">
+              Página {page + 1} de {Math.ceil(total / PAGE_SIZE)}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handlePageNext}
+              disabled={(page + 1) * PAGE_SIZE >= total}
+            >
+              Próxima
+            </Button>
           </div>
         )}
       </div>
@@ -267,6 +308,18 @@ export default function AdminUsers() {
                   <span className="text-sm flex items-center gap-1">
                     <Home className="w-4 h-4" />
                     {selectedUser.households_count}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-muted-foreground">Criado em</span>
+                  <span className="text-sm">
+                    {selectedUser.created_at
+                      ? new Date(selectedUser.created_at).toLocaleDateString("pt-BR", {
+                          day: "2-digit",
+                          month: "2-digit",
+                          year: "numeric",
+                        })
+                      : "—"}
                   </span>
                 </div>
               </Card>
@@ -385,21 +438,35 @@ export default function AdminUsers() {
       </AlertDialog>
 
       {/* Confirm Delete Dialog */}
-      <AlertDialog open={showConfirmDelete} onOpenChange={setShowConfirmDelete}>
+      <AlertDialog
+        open={showConfirmDelete}
+        onOpenChange={(open) => {
+          setDeleteConfirmInput("");
+          setShowConfirmDelete(open);
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Excluir usuário?</AlertDialogTitle>
             <AlertDialogDescription>
               Esta ação remove o perfil, preferências e roles do usuário.
               O usuário será removido de todas as famílias.
-              A conta de autenticação não será excluída.
+              Para confirmar, digite <strong>EXCLUIR</strong> abaixo.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <div className="py-2">
+            <Input
+              placeholder="Digite EXCLUIR"
+              value={deleteConfirmInput}
+              onChange={(e) => setDeleteConfirmInput(e.target.value)}
+              className="border-destructive/50"
+            />
+          </div>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancelar</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDeleteUser}
-              disabled={isProcessing}
+              disabled={isProcessing || deleteConfirmInput.trim() !== DELETE_CONFIRM_TEXT}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Excluir"}

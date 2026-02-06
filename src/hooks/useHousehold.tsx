@@ -106,8 +106,13 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
     setUserRole(null);
   }, []);
 
-  // Handle deleted household - show toast and clear selection
-  const handleHouseholdDeleted = useCallback(() => {
+  // Handle deleted/forbidden household:
+  // - show toast
+  // - clear selection
+  // - remove from local list (defensive)
+  // - clear caches
+  // Note: refreshHouseholds is called separately after this to avoid circular dependency
+  const handleHouseholdDeleted = useCallback((householdId?: string) => {
     if (!hasShownRemovedToast.current) {
       hasShownRemovedToast.current = true;
       toast({
@@ -116,6 +121,11 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
         variant: "destructive",
       });
     }
+
+    if (householdId) {
+      setHouseholds((prev) => prev.filter((h) => h.id !== householdId));
+    }
+
     clearHousehold();
     queryClient.clear();
   }, [clearHousehold, queryClient, toast]);
@@ -137,7 +147,7 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
           setHasSelectedHousehold(true);
         } else {
           // Saved household no longer exists (deleted), clear it
-          handleHouseholdDeleted();
+          handleHouseholdDeleted(savedId);
         }
       }
     } catch (error) {
@@ -161,7 +171,8 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
         
         if (!householdExists) {
           // Household was deleted, handle gracefully
-          handleHouseholdDeleted();
+          handleHouseholdDeleted(currentHousehold.id);
+          await refreshHouseholds();
           return;
         }
 
@@ -172,7 +183,8 @@ export function HouseholdProvider({ children }: { children: ReactNode }) {
         
         // If user is no longer a member (role is null), they were removed
         if (!role) {
-          handleHouseholdDeleted();
+          handleHouseholdDeleted(currentHousehold.id);
+          await refreshHouseholds();
           return;
         }
         

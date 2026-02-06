@@ -54,13 +54,26 @@ export interface Account {
 
 // Get all households the user is a member of
 export async function getUserHouseholds(): Promise<Household[]> {
+  const { data: auth } = await supabase.auth.getUser();
+  const user = auth.user;
+  if (!user) return [];
+
+  // IMPORTANT:
+  // We must never list "all households". We only list households where the
+  // current user has a membership row. This prevents "orphan" households
+  // (no membership) from showing up in "Minhas famílias".
   const { data, error } = await supabase
-    .from("households")
-    .select("*")
-    .order("created_at");
+    .from("household_members")
+    .select("household:households(*)")
+    .eq("user_id", user.id)
+    .order("joined_at", { ascending: true });
 
   if (error) throw error;
-  return data || [];
+
+  type Row = { household: Household | null };
+  return ((data as unknown as Row[]) || [])
+    .map((r) => r.household)
+    .filter((h): h is Household => Boolean(h));
 }
 
 // Get a single household by ID
@@ -193,30 +206,186 @@ export async function addHouseholdMember(
   return data as unknown as HouseholdMember;
 }
 
-// Remove member from household
-export async function removeHouseholdMember(householdId: string, userId: string): Promise<void> {
+// Remove (expel) member from household — with guards
+export async function removeHouseholdMember(householdId: string, targetUserId: string): Promise<void> {
+  // 1) Must be authenticated
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Não autenticado");
+
+  // 2) Cannot expel yourself
+  if (user.id === targetUserId) {
+    throw new Error("Você não pode se expulsar. Use 'Sair da família' em vez disso.");
+  }
+
+  // 3) Requester must be admin/owner
+  const requesterRole = await getUserRole(householdId);
+  if (requesterRole !== "owner" && requesterRole !== "admin") {
+    throw new Error("Apenas administradores podem remover membros.");
+  }
+
+  // 4) Cannot expel the last admin/owner
+  const { data: admins, error: adminsErr } = await supabase
+    .from("household_members")
+    .select("user_id")
+    .eq("household_id", householdId)
+    .in("role", ["owner", "admin"]);
+
+  if (adminsErr) throw adminsErr;
+
+  const adminIds = (admins || []).map((a) => a.user_id);
+  if (adminIds.includes(targetUserId) && adminIds.length <= 1) {
+    throw new Error("Não é possível remover o último administrador da família.");
+  }
+
+  // 5) Execute deletion (RLS also enforces admin-only deletes)
   const { error } = await supabase
     .from("household_members")
     .delete()
     .eq("household_id", householdId)
-    .eq("user_id", userId);
+    .eq("user_id", targetUserId);
 
   if (error) throw error;
 }
 
-// Update member role
+// Update member role with comprehensive guards:
+// - Only admin/owner can change roles
+// - Cannot change own role
+// - Cannot demote the last admin/owner (prevents orphaned households)
 export async function updateMemberRole(
   householdId: string,
-  userId: string,
-  role: HouseholdRole
+  targetUserId: string,
+  newRole: HouseholdRole
 ): Promise<void> {
+  // 1) Must be authenticated
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Não autenticado");
+
+  // 2) Cannot change own role
+  if (user.id === targetUserId) {
+    throw new Error("Você não pode alterar seu próprio cargo.");
+  }
+
+  // 3) Requester must be admin/owner in this household
+  const requesterRole = await getUserRole(householdId);
+  if (requesterRole !== "owner" && requesterRole !== "admin") {
+    throw new Error("Apenas administradores podem alterar cargos.");
+  }
+
+  // 4) If demoting (admin/owner → member), ensure at least one admin/owner remains
+  if (newRole === "member") {
+    const { data: admins, error: adminsErr } = await supabase
+      .from("household_members")
+      .select("user_id")
+      .eq("household_id", householdId)
+      .in("role", ["owner", "admin"]);
+
+    if (adminsErr) throw adminsErr;
+
+    const adminIds = (admins || []).map((a) => a.user_id);
+    const remainingAdmins = adminIds.filter((id) => id !== targetUserId);
+    if (remainingAdmins.length === 0) {
+      throw new Error(
+        "Não é possível rebaixar: esta família ficaria sem administradores."
+      );
+    }
+  }
+
+  // 5) Execute the update (RLS also enforces admin-only writes)
   const { error } = await supabase
     .from("household_members")
-    .update({ role })
+    .update({ role: newRole })
     .eq("household_id", householdId)
-    .eq("user_id", userId);
+    .eq("user_id", targetUserId);
 
   if (error) throw error;
+}
+
+// Get households related to the current household (through shared members).
+// Used by the Split system to restrict participant selection to "family circle".
+export async function getRelatedHouseholds(
+  householdId: string
+): Promise<{ id: string; name: string }[]> {
+  // Step 1: get user_ids of the current household members
+  const { data: members, error: membersError } = await supabase
+    .from("household_members")
+    .select("user_id")
+    .eq("household_id", householdId);
+
+  if (membersError) throw membersError;
+
+  const userIds = (members || []).map((m) => m.user_id);
+  if (userIds.length === 0) return [];
+
+  // Step 2: get all households those users belong to
+  const { data: rows, error: rowsError } = await supabase
+    .from("household_members")
+    .select("household:households(id, name)")
+    .in("user_id", userIds);
+
+  if (rowsError) throw rowsError;
+
+  // Step 3: deduplicate
+  const uniqueMap = new Map<string, { id: string; name: string }>();
+  for (const row of rows || []) {
+    const h = (row as any).household as { id: string; name: string } | null;
+    if (h && !uniqueMap.has(h.id)) {
+      uniqueMap.set(h.id, h);
+    }
+  }
+
+  return Array.from(uniqueMap.values()).sort((a, b) =>
+    a.name.localeCompare(b.name)
+  );
+}
+
+// Get household members with display names from profiles.
+// Uses RPC get_household_members_with_display_names when available (run migration 20260206210000);
+// otherwise falls back to members + current user profile only.
+export async function getHouseholdMembersWithProfiles(
+  householdId: string
+): Promise<
+  (HouseholdMember & { display_name: string; email: string | null })[]
+> {
+  const { data: rpcData, error: rpcError } = await supabase.rpc(
+    "get_household_members_with_display_names",
+    { _household_id: householdId }
+  );
+
+  if (!rpcError && rpcData && Array.isArray(rpcData) && rpcData.length >= 0) {
+    return (rpcData as any[]).map((row) => ({
+      ...row,
+      email: null,
+    }));
+  }
+
+  // Fallback: sem RPC (migration não aplicada) — só conseguimos o nome do usuário atual
+  const { data: { user } } = await supabase.auth.getUser();
+  const { data: members, error } = await supabase
+    .from("household_members")
+    .select("*")
+    .eq("household_id", householdId)
+    .order("joined_at");
+
+  if (error) throw error;
+
+  let displayNameForCurrent: string | null = null;
+  if (user) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("display_name")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    displayNameForCurrent = profile?.display_name ?? null;
+  }
+
+  return (members || []).map((row: HouseholdMember) => ({
+    ...row,
+    display_name:
+      user && row.user_id === user.id
+        ? (displayNameForCurrent || "Sem nome")
+        : "Membro",
+    email: null,
+  }));
 }
 
 // Get household accounts

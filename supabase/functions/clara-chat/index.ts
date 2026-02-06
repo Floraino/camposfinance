@@ -1,9 +1,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const corsHeaders = {
+const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
+  "Access-Control-Max-Age": "86400",
 };
 
 // UUID validation regex
@@ -765,16 +767,33 @@ const aiTools = [
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
+    return new Response("ok", { status: 200, headers: corsHeaders });
   }
 
   try {
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+    if (!GEMINI_API_KEY) {
+      return new Response(JSON.stringify({
+        error: "Assistente Odin não configurado",
+        code: "AI_NOT_CONFIGURED",
+        details: "GEMINI_API_KEY não está definida. Configure em: Supabase Dashboard → Edge Functions → Secrets.",
+      }), {
+        status: 503,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) throw new Error("Supabase configuration is missing");
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+      return new Response(JSON.stringify({
+        error: "Configuração do servidor incompleta",
+        code: "SERVER_MISCONFIGURED",
+      }), {
+        status: 503,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
@@ -795,7 +814,7 @@ serve(async (req) => {
       });
     }
 
-    const { messages, householdId } = await req.json();
+    const { messages, householdId, quickAction } = await req.json();
 
     if (!householdId || !UUID_REGEX.test(householdId)) {
       return new Response(JSON.stringify({ error: "householdId é obrigatório e deve ser válido." }), {
@@ -828,6 +847,84 @@ serve(async (req) => {
     }
 
     const householdName = await getHouseholdName(supabase, householdId);
+    const requestId = crypto.randomUUID?.()?.slice(0, 8) || `req-${Date.now()}`;
+
+    // Quick action: run tool directly and stream result (no AI placeholder)
+    const QUICK_ACTION_MAP: Record<string, string> = {
+      diagnostico_periodo_total: "analyze_spending",
+      verificar_pendencias: "get_pending_items",
+      listar_regras: "list_categorization_rules",
+      ver_metas_mes: "check_goals_progress",
+    };
+    if (quickAction && QUICK_ACTION_MAP[quickAction]) {
+      const actionType = QUICK_ACTION_MAP[quickAction];
+      const startTime = Date.now();
+      console.log(`[clara-chat][${requestId}] quickAction=${quickAction} actionType=${actionType} householdId=${householdId} userId=${user.id}`);
+      const encoder = new TextEncoder();
+      let result: { success: boolean; message: string } = { success: false, message: "Erro ao executar ação." };
+      try {
+        switch (actionType) {
+          case "analyze_spending": {
+            const analysis = await analyzeSpendingTrends(supabase, householdId);
+            const insightsMsg = analysis.insights.join("\n");
+            const subsMsg = analysis.recurringSubscriptions.length > 0
+              ? `\n\n🔄 **Assinaturas Detectadas**:\n${analysis.recurringSubscriptions.map((s: any) => `- ${s.description}: ~R$ ${s.avgAmount.toFixed(2)}/mês`).join("\n")}`
+              : "";
+            result = { success: true, message: `\n\n📊 **Diagnóstico de Economia**:\n\n${insightsMsg}${subsMsg}\n` };
+            break;
+          }
+          case "get_pending_items": {
+            const pending = await getPendingItems(supabase, householdId);
+            if (pending.items.length === 0) {
+              result = { success: true, message: "✅ Nenhuma pendência! Tudo em ordem." };
+            } else {
+              const pendingMsg = pending.items.map((i: any) => `- ⚠️ ${i.message}`).join("\n");
+              result = { success: true, message: `\n\n📋 **Pendências**:\n\n${pendingMsg}\n\nPosso ajudar a resolver alguma?` };
+            }
+            break;
+          }
+          case "list_categorization_rules": {
+            const rulesResult = await listCategorizationRules(supabase, householdId);
+            if (rulesResult.rules.length === 0) {
+              result = { success: true, message: "📜 Nenhuma regra automática configurada. Quer criar uma?" };
+            } else {
+              const rulesList = rulesResult.rules.map((r: any) => `- "${r.pattern}" → ${categoryLabels[r.category] || r.category} (aplicada ${r.times_applied}x)`).join("\n");
+              result = { success: true, message: `\n\n📜 **Regras Automáticas**:\n\n${rulesList}\n` };
+            }
+            break;
+          }
+          case "check_goals_progress": {
+            const goalsResult = await getCategoryBudgetProgress(supabase, householdId);
+            if (goalsResult.budgets.length === 0) {
+              result = { success: true, message: "📊 Nenhuma meta definida para este mês. Quer criar uma?" };
+            } else {
+              const goalsMsg = goalsResult.budgets.map((b: any) => {
+                const icon = b.status === "exceeded" ? "🚨" : b.status === "warning" ? "⚠️" : "✅";
+                return `${icon} **${categoryLabels[b.category] || b.category}**: R$ ${b.spent.toFixed(2)} / R$ ${b.amount.toFixed(2)} (${b.percentage}%)`;
+              }).join("\n");
+              result = { success: true, message: `\n\n🎯 **Progresso das Metas**:\n\n${goalsMsg}\n` };
+            }
+            break;
+          }
+          default:
+            result = { success: false, message: "Ação rápida não reconhecida." };
+        }
+      } catch (err) {
+        console.error(`[clara-chat][${requestId}] quickAction error:`, err);
+        result = { success: false, message: `Erro ao executar: ${err instanceof Error ? err.message : "erro desconhecido"}. Tente novamente.` };
+      }
+      const duration = Date.now() - startTime;
+      console.log(`[clara-chat][${requestId}] quickAction done in ${duration}ms`);
+      const icon = result.success ? "✅" : "❌";
+      const payload = `data: ${JSON.stringify({ choices: [{ delta: { content: `\n\n${icon} ${result.message}` } }] })}\n\ndata: [DONE]\n\n`;
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(payload));
+          controller.close();
+        },
+      });
+      return new Response(stream, { headers: { ...corsHeaders, "Content-Type": "text/event-stream" } });
+    }
 
     // Fetch financial data
     const now = new Date();
@@ -959,18 +1056,26 @@ ${recentTransactions || "Nenhuma transação"}
 5. Para exclusões, SEMPRE use preview primeiro
 6. SUGIRA ações que podem ajudar o usuário`;
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    // Convert messages to Gemini format
+    const geminiContents: any[] = [];
+    for (const msg of messages) {
+      geminiContents.push({
+        role: msg.role === "assistant" ? "model" : "user",
+        parts: [{ text: msg.content }],
+      });
+    }
+
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=${GEMINI_API_KEY}`;
+    const response = await fetch(geminiUrl, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [{ role: "system", content: systemPrompt }, ...messages],
-        tools: aiTools,
-        tool_choice: "auto",
-        stream: true,
+        contents: geminiContents,
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 8192,
+        },
       }),
     });
 
@@ -989,7 +1094,7 @@ ${recentTransactions || "Nenhuma transação"}
 
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
-    let toolCalls: any[] = [];
+    let fullResponseText = "";
 
     const stream = new ReadableStream({
       async start(controller) {
@@ -999,28 +1104,40 @@ ${recentTransactions || "Nenhuma transação"}
             if (done) break;
 
             const chunk = decoder.decode(value, { stream: true });
-            controller.enqueue(value);
 
+            // Parse Gemini SSE events and convert to OpenAI-compatible format
             const lines = chunk.split("\n");
             for (const line of lines) {
-              if (line.startsWith("data: ") && line !== "data: [DONE]") {
+              if (line.startsWith("data: ")) {
+                const payload = line.slice(6).trim();
+                if (!payload || payload === "[DONE]") continue;
                 try {
-                  const json = JSON.parse(line.slice(6));
-                  const delta = json.choices?.[0]?.delta;
-                  if (delta?.tool_calls) {
-                    for (const tc of delta.tool_calls) {
-                      if (tc.index !== undefined) {
-                        if (!toolCalls[tc.index]) {
-                          toolCalls[tc.index] = { id: tc.id, function: { name: "", arguments: "" } };
-                        }
-                        if (tc.function?.name) toolCalls[tc.index].function.name = tc.function.name;
-                        if (tc.function?.arguments) toolCalls[tc.index].function.arguments += tc.function.arguments;
-                      }
+                  const json = JSON.parse(payload);
+                  const textParts = json.candidates?.[0]?.content?.parts || [];
+                  for (const part of textParts) {
+                    if (part.text) {
+                      fullResponseText += part.text;
+                      // Emit in OpenAI-compatible SSE format for the frontend
+                      const openaiEvent = JSON.stringify({
+                        choices: [{ delta: { content: part.text } }],
+                      });
+                      controller.enqueue(encoder.encode(`data: ${openaiEvent}\n\n`));
                     }
                   }
-                } catch { /* ignore */ }
+                } catch { /* ignore parse errors in stream */ }
               }
             }
+          }
+
+          // Try to extract tool calls from the full response text (Gemini text-based)
+          // The model may output JSON blocks for function calls
+          const toolCalls: any[] = [];
+          const toolCallRegex = /\{"function_call":\s*\{"name":\s*"(\w+)",\s*"arguments":\s*(\{[^}]*\})\s*\}\s*\}/g;
+          let match;
+          while ((match = toolCallRegex.exec(fullResponseText)) !== null) {
+            toolCalls.push({
+              function: { name: match[1], arguments: match[2] },
+            });
           }
 
           // Process tool calls

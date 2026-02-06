@@ -123,22 +123,179 @@ const HEADER_PATTERNS = [
 ];
 
 /**
- * Analyze CSV content using AI
+ * Analyze CSV content using AI edge function.
+ * If edge function is unavailable, falls back to local rule-based analysis.
  */
 export async function analyzeCSV(csvContent: string): Promise<CSVAnalysis> {
-  const { data, error } = await supabase.functions.invoke("analyze-csv", {
-    body: { csvContent, sampleSize: 50 },
+  // Validate CSV size on client (max 5MB)
+  if (csvContent.length > 5 * 1024 * 1024) {
+    throw new Error("Arquivo CSV muito grande (máximo 5MB). Divida o arquivo em partes menores.");
+  }
+
+  // Validate CSV has content
+  const lines = csvContent.split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) {
+    throw new Error("O CSV deve ter pelo menos 2 linhas (cabeçalho + dados).");
+  }
+
+  try {
+    const { data, error } = await supabase.functions.invoke("analyze-csv", {
+      body: { csvContent, sampleSize: 50 },
+    });
+
+    if (error) {
+      console.warn("[CSV] Edge function analyze-csv indisponível, usando análise local:", error.message);
+      return localAnalyzeCSV(csvContent);
+    }
+
+    if (data?.error) {
+      console.warn("[CSV] Edge function retornou erro:", data.error);
+      return localAnalyzeCSV(csvContent);
+    }
+
+    return data as CSVAnalysis;
+  } catch (networkErr) {
+    console.warn("[CSV] Network error ao chamar analyze-csv, usando análise local:", networkErr);
+    return localAnalyzeCSV(csvContent);
+  }
+}
+
+/**
+ * Local CSV analysis fallback (no AI, pure rules).
+ * Used when edge function is not deployed or unavailable.
+ */
+function localAnalyzeCSV(csvContent: string): CSVAnalysis {
+  console.log("[CSV] Running local analysis (rule-based)...");
+  
+  const allLines = csvContent.split(/\r?\n/).filter(l => l.trim());
+  
+  // Detect separator
+  const firstLines = allLines.slice(0, 10);
+  const sepCounts = { ",": 0, ";": 0, "\t": 0 };
+  for (const line of firstLines) {
+    sepCounts[","] += (line.match(/,/g) || []).length;
+    sepCounts[";"] += (line.match(/;/g) || []).length;
+    sepCounts["\t"] += (line.match(/\t/g) || []).length;
+  }
+  const separator = Object.entries(sepCounts).sort(([, a], [, b]) => b - a)[0][0] as "," | ";" | "\t";
+
+  const rows = allLines.map(line => line.split(separator).map(c => c.trim().replace(/^["']|["']$/g, '')));
+  
+  // Detect header
+  const firstRow = rows[0] || [];
+  const lowerFirstRow = firstRow.map(h => h.toLowerCase().trim());
+  const isHeader = lowerFirstRow.some(h => /^(data|descri|valor|entrada|sa[ií]da|hist[oó]rico)/.test(h));
+  
+  const headers = isHeader ? firstRow : firstRow.map((_, i) => `Coluna ${i + 1}`);
+  const dataStartIndex = isHeader ? 1 : 0;
+  const dataRows = rows.slice(dataStartIndex, 50 + dataStartIndex);
+
+  // Detect Entrada/Saída
+  const lowerHeaders = headers.map(h => h.toLowerCase().trim());
+  const entradaIndex = lowerHeaders.findIndex(h => /entrada/i.test(h));
+  const saidaIndex = lowerHeaders.findIndex(h => /sa[ií]da/i.test(h));
+  const hasEntradaSaida = entradaIndex >= 0 && saidaIndex >= 0;
+
+  // Rule-based column mapping
+  const columnMappings: ColumnMapping[] = [];
+  const usedIndices = new Set<number>();
+  const emptyColumns = new Set<number>();
+  const numCols = Math.max(...rows.map(r => r.length));
+
+  for (let col = 0; col < numCols; col++) {
+    const colValues = rows.map(r => r[col] || "").filter(v => v.trim() !== "");
+    if (colValues.length <= 1) emptyColumns.add(col);
+  }
+
+  // Map by header name
+  for (let i = 0; i < lowerHeaders.length; i++) {
+    if (emptyColumns.has(i)) continue;
+    const h = lowerHeaders[i];
+    if (/saldo|balance/i.test(h)) continue; // skip saldo
+
+    if (hasEntradaSaida && i === entradaIndex) {
+      columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: "entrada", confidence: 0.95 });
+      usedIndices.add(i);
+    } else if (hasEntradaSaida && i === saidaIndex) {
+      columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: "saida", confidence: 0.95 });
+      usedIndices.add(i);
+    } else if (/^(data|date|dia|dt|movimenta)/i.test(h)) {
+      columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: "date", confidence: 0.9 });
+      usedIndices.add(i);
+    } else if (/descri|nome|hist[oó]rico|lan[cç]amento|estabelecimento/i.test(h)) {
+      columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: "description", confidence: 0.9 });
+      usedIndices.add(i);
+    } else if (!hasEntradaSaida && /valor|amount|total|pre[cç]o|custo/i.test(h)) {
+      columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: "amount", confidence: 0.9 });
+      usedIndices.add(i);
+    } else if (/categ|tipo/i.test(h)) {
+      columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: "category", confidence: 0.8 });
+      usedIndices.add(i);
+    } else if (/pagamento|payment|forma|m[eé]todo/i.test(h)) {
+      columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: "payment_method", confidence: 0.8 });
+      usedIndices.add(i);
+    }
+  }
+
+  // Content-based detection for unmapped columns
+  for (let i = 0; i < headers.length; i++) {
+    if (usedIndices.has(i) || emptyColumns.has(i)) continue;
+    const sampleValues = dataRows.slice(0, 5).map(r => r[i] || "");
+    
+    if (!columnMappings.find(m => m.internalField === "date")) {
+      const datePattern = /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$|^\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}$/;
+      if (sampleValues.filter(v => datePattern.test(v.trim())).length >= 3) {
+        columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: "date", confidence: 0.7 });
+        usedIndices.add(i);
+        continue;
+      }
+    }
+    
+    if (!hasEntradaSaida && !columnMappings.find(m => m.internalField === "amount")) {
+      const isAmount = sampleValues.filter(v => /^-?[R$\s]*\d{1,3}([.,]\d{3})*([.,]\d{1,2})?$/.test(v.replace(/[R$\s]/g, "").trim())).length >= 3;
+      if (isAmount) {
+        columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: "amount", confidence: 0.7 });
+        usedIndices.add(i);
+        continue;
+      }
+    }
+  }
+
+  // Assign longest text column as description if not found
+  if (!columnMappings.find(m => m.internalField === "description")) {
+    let maxLen = 0, descIdx = -1;
+    for (let i = 0; i < headers.length; i++) {
+      if (usedIndices.has(i) || emptyColumns.has(i)) continue;
+      const avgLen = dataRows.slice(0, 5).reduce((sum, r) => sum + (r[i]?.length || 0), 0) / 5;
+      if (avgLen > maxLen) { maxLen = avgLen; descIdx = i; }
+    }
+    if (descIdx >= 0) {
+      columnMappings.push({ csvColumn: headers[descIdx], csvIndex: descIdx, internalField: "description", confidence: 0.6 });
+    }
+  }
+
+  // Build sample rows
+  const sampleRowsMapped = dataRows.slice(0, 15).map((row, idx) => {
+    const mapped: Record<string, string> = {};
+    for (const mapping of columnMappings) {
+      mapped[mapping.internalField] = row[mapping.csvIndex] || "";
+    }
+    mapped._raw = row.join(" | ");
+    mapped._rowIndex = String(dataStartIndex + idx + 1);
+    return mapped;
   });
 
-  if (error) {
-    throw new Error(`Erro ao analisar CSV: ${error.message}`);
-  }
-
-  if (data.error) {
-    throw new Error(data.error);
-  }
-
-  return data as CSVAnalysis;
+  return {
+    separator,
+    encoding: "UTF-8",
+    dateFormat: "dd/MM/yyyy",
+    currencyFormat: "BR",
+    hasHeader: isHeader,
+    hasEntradaSaida,
+    columnMappings,
+    sampleRows: sampleRowsMapped,
+    rowAnalysis: [],
+  };
 }
 
 /**
@@ -544,7 +701,8 @@ export function parseCSVWithMappings(
 }
 
 /**
- * Import transactions via edge function
+ * Import transactions via edge function.
+ * Falls back to direct Supabase insert if edge function is unavailable.
  */
 export async function importTransactions(
   householdId: string,
@@ -564,19 +722,109 @@ export async function importTransactions(
     };
   }
 
-  const { data, error } = await supabase.functions.invoke("import-csv", {
-    body: { householdId, transactions: validTransactions, skipDuplicates },
-  });
+  // Try edge function first
+  try {
+    const { data, error } = await supabase.functions.invoke("import-csv", {
+      body: { householdId, transactions: validTransactions, skipDuplicates },
+    });
 
-  if (error) {
-    throw new Error(`Erro na importação: ${error.message}`);
+    if (error) {
+      console.warn("[CSV Import] Edge function indisponível, usando importação direta:", error.message);
+      return await directImport(householdId, validTransactions, skipDuplicates);
+    }
+
+    if (data?.error) {
+      // If it's a PRO check failure, propagate
+      if (data.code === "PRO_REQUIRED") {
+        throw new Error("Importação CSV é um recurso PRO. Atualize o plano da família.");
+      }
+      throw new Error(data.error);
+    }
+
+    return data as ImportResult;
+  } catch (err) {
+    // If it's a known error (PRO, auth), propagate
+    if (err instanceof Error && (err.message.includes("PRO") || err.message.includes("autenticado"))) {
+      throw err;
+    }
+    console.warn("[CSV Import] Trying direct import fallback:", err);
+    return await directImport(householdId, validTransactions, skipDuplicates);
+  }
+}
+
+/**
+ * Direct import fallback when edge function is unavailable.
+ * Inserts transactions directly via Supabase client.
+ */
+async function directImport(
+  householdId: string,
+  transactions: Array<ParsedRow["parsed"]>,
+  skipDuplicates: boolean
+): Promise<ImportResult> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Usuário não autenticado");
+
+  const result: ImportResult = { imported: 0, duplicates: 0, failed: 0, errors: [] };
+
+  // Check for existing duplicates
+  let existingHashes = new Set<string>();
+  if (skipDuplicates) {
+    const { data: existing } = await supabase
+      .from("transactions")
+      .select("transaction_date, amount, description")
+      .eq("household_id", householdId);
+
+    if (existing) {
+      for (const tx of existing) {
+        existingHashes.add(generateImportHash(tx.transaction_date, tx.amount, tx.description));
+      }
+    }
   }
 
-  if (data.error) {
-    throw new Error(data.error);
+  const toInsert: any[] = [];
+  const now = new Date().toISOString();
+
+  for (let i = 0; i < transactions.length; i++) {
+    const tx = transactions[i];
+    if (!tx) continue;
+
+    if (skipDuplicates && tx.import_hash && existingHashes.has(tx.import_hash)) {
+      result.duplicates++;
+      continue;
+    }
+
+    toInsert.push({
+      user_id: user.id,
+      household_id: householdId,
+      description: tx.description.substring(0, 255),
+      amount: tx.amount,
+      category: tx.category || "other",
+      payment_method: tx.payment_method || "pix",
+      status: tx.status || "paid",
+      transaction_date: tx.transaction_date,
+      notes: tx.notes ? tx.notes.substring(0, 500) : null,
+      is_recurring: false,
+      created_at: now,
+      updated_at: now,
+    });
   }
 
-  return data as ImportResult;
+  // Insert in batches of 50
+  for (let i = 0; i < toInsert.length; i += 50) {
+    const batch = toInsert.slice(i, i + 50);
+    const { error: insertError } = await supabase.from("transactions").insert(batch);
+
+    if (insertError) {
+      console.error("[CSV Import] Direct insert error:", insertError);
+      result.failed += batch.length;
+      result.errors.push({ row: i + 1, reason: insertError.message });
+    } else {
+      result.imported += batch.length;
+    }
+  }
+
+  console.log(`[CSV Import] Direct import done: imported=${result.imported}, duplicates=${result.duplicates}, failed=${result.failed}`);
+  return result;
 }
 
 /**

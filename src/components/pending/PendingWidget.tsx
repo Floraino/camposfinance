@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { AlertCircle, ChevronRight, Loader2, Tag, Copy, Users, Crown } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { AlertCircle, ChevronRight, Loader2, Tag, Copy, Users, Crown, Clock, CalendarClock, RotateCcw, TrendingUp, BarChart3, Ghost } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useNavigate } from "react-router-dom";
 import { getAllPendingItems, type PendingSummary } from "@/services/pendingItemsService";
@@ -9,11 +9,18 @@ interface PendingWidgetProps {
   className?: string;
 }
 
-const typeIcons = {
+const typeIcons: Record<string, React.ElementType> = {
   uncategorized: Tag,
   duplicate: Copy,
   pending_split: Users,
   pro_expiring: Crown,
+  // v2 smart pending
+  overdue_bill: Clock,
+  upcoming_bill: CalendarClock,
+  missing_recurring: RotateCcw,
+  budget_exceeded: TrendingUp,
+  budget_warning: BarChart3,
+  inactivity: Ghost,
 };
 
 const typeLabels: Record<string, string> = {
@@ -21,6 +28,13 @@ const typeLabels: Record<string, string> = {
   duplicate: "Duplicatas",
   pending_split: "Splits pendentes",
   pro_expiring: "PRO expirando",
+  // v2 smart pending
+  overdue_bill: "Vencidos",
+  upcoming_bill: "Próximos",
+  missing_recurring: "Recorrentes",
+  budget_exceeded: "Estourados",
+  budget_warning: "Alerta",
+  inactivity: "Inatividade",
 };
 
 export function PendingWidget({ householdId, className }: PendingWidgetProps) {

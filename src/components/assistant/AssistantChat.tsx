@@ -10,15 +10,19 @@ import ReactMarkdown from "react-markdown";
 import { DestructiveActionConfirmation, DestructiveActionPreview } from "./DestructiveActionConfirmation";
 import { deleteTransactionsBatch } from "@/services/destructiveActionsService";
 
+type MessageStatus = "loading" | "done" | "error";
+
 interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
   deletionPreview?: DestructiveActionPreview;
+  status?: MessageStatus;
+  requestId?: string;
+  retryPayload?: { messages: { role: string; content: string }[]; quickAction?: string };
 }
 
-const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/clara-chat`;
 
 // Parse deletion preview from AI response
 function parseDeletionPreview(content: string): DestructiveActionPreview | null {
@@ -117,12 +121,23 @@ export function AssistantChat() {
         });
       } catch (error) {
         console.error("Error initializing chat:", error);
+        const msg = error instanceof Error ? error.message : "";
+        const isNetworkError = msg === "Failed to fetch" || msg.includes("NetworkError") || msg.includes("Load failed");
         setMessages([{
           id: "1",
           role: "assistant",
-          content: `Olá! Sou o Odin, seu assistente financeiro da família **${currentHousehold.name}**. 🔒 Modo de Segurança está ativo para proteger seus dados. Como posso te ajudar? 💰`,
+          content: isNetworkError
+            ? `Olá! Sou o Odin, mas não consegui conectar ao servidor agora. Verifique sua internet e, se estiver em produção, se a chave **GEMINI_API_KEY** está configurada nas Edge Functions do Supabase. Como posso te ajudar? 💰`
+            : `Olá! Sou o Odin, seu assistente financeiro da família **${currentHousehold.name}**. 🔒 Modo de Segurança está ativo. Como posso te ajudar? 💰`,
           timestamp: new Date(),
         }]);
+        if (isNetworkError) {
+          toast({
+            title: "Conexão com o Odin falhou",
+            description: "Verifique sua conexão e a configuração da Edge Function clara-chat (GEMINI_API_KEY nos Secrets).",
+            variant: "destructive",
+          });
+        }
       }
       setIsInitializing(false);
     };
@@ -130,12 +145,41 @@ export function AssistantChat() {
     initializeChat();
   }, [currentHousehold?.id, hasSelectedHousehold]);
 
+  const appendAssistantLoadingMessage = useCallback((requestId: string): string => {
+    const id = `loading-${requestId}-${Date.now()}`;
+    setMessages((prev) => [...prev, {
+      id,
+      role: "assistant",
+      content: "Processando…",
+      timestamp: new Date(),
+      status: "loading",
+      requestId,
+    }]);
+    return id;
+  }, []);
+
+  const updateMessageById = useCallback((messageId: string, updates: { content?: string; status?: MessageStatus; deletionPreview?: DestructiveActionPreview | null }) => {
+    setMessages((prev) => prev.map((m) =>
+      m.id === messageId ? { ...m, ...updates } : m
+    ));
+  }, []);
+
+  const setMessageErrorById = useCallback((messageId: string, content: string, retryPayload?: Message["retryPayload"]) => {
+    setMessages((prev) => prev.map((m) =>
+      m.id === messageId ? { ...m, content, status: "error" as MessageStatus, retryPayload } : m
+    ));
+  }, []);
+
   const streamChat = async ({ 
     messages: chatMessages, 
-    isInitial = false 
+    isInitial = false,
+    assistantMessageId,
+    quickAction,
   }: { 
     messages: { role: string; content: string }[]; 
     isInitial?: boolean;
+    assistantMessageId?: string;
+    quickAction?: string;
   }) => {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) {
@@ -156,25 +200,44 @@ export function AssistantChat() {
       return;
     }
 
-    const resp = await fetch(CHAT_URL, {
+    const baseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+    if (!baseUrl || baseUrl === "undefined") {
+      throw new Error("VITE_SUPABASE_URL não configurada. Adicione no .env do projeto.");
+    }
+    if (!anonKey || anonKey === "undefined") {
+      throw new Error("VITE_SUPABASE_PUBLISHABLE_KEY não configurada no .env.");
+    }
+
+    const resp = await fetch(`${baseUrl}/functions/v1/clara-chat`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${session.access_token}`,
+        apikey: anonKey,
       },
       body: JSON.stringify({ 
         messages: chatMessages,
-        householdId: currentHousehold.id 
+        householdId: currentHousehold.id,
+        ...(quickAction ? { quickAction } : {}),
       }),
     });
 
     if (!resp.ok) {
-      const error = await resp.json().catch(() => ({ error: "Erro desconhecido" }));
+      const error = await resp.json().catch(() => ({ error: "Erro desconhecido", code: "" }));
       
       if (resp.status === 403) {
         toast({
           title: "Acesso negado",
           description: "Você não tem permissão para acessar os dados desta família",
+          variant: "destructive",
+        });
+        return;
+      }
+      if (resp.status === 503 && error.code === "AI_NOT_CONFIGURED") {
+        toast({
+          title: "Odin não configurado",
+          description: "A chave Gemini (GEMINI_API_KEY) não está configurada nas Edge Functions do Supabase. Configure em: Dashboard → Edge Functions → Secrets.",
           variant: "destructive",
         });
         return;
@@ -189,10 +252,10 @@ export function AssistantChat() {
     const decoder = new TextDecoder();
     let textBuffer = "";
     let assistantContent = "";
-    const assistantId = Date.now().toString();
+    const assistantId = assistantMessageId || `ast-${Date.now()}`;
 
-    if (!isInitial) {
-      setMessages(prev => [...prev, {
+    if (!isInitial && !assistantMessageId) {
+      setMessages((prev) => [...prev, {
         id: assistantId,
         role: "assistant",
         content: "",
@@ -204,24 +267,40 @@ export function AssistantChat() {
       assistantContent = content;
       const preview = parseDeletionPreview(content);
       const cleanContent = cleanMessageContent(content);
-      
-      setMessages(prev => {
-        const last = prev[prev.length - 1];
-        if (last?.role === "assistant") {
-          return prev.map((m, i) => 
-            i === prev.length - 1 
-              ? { ...m, content: cleanContent, deletionPreview: preview || m.deletionPreview } 
-              : m
-          );
-        }
-        return [...prev, {
-          id: assistantId,
-          role: "assistant",
+
+      if (assistantMessageId) {
+        updateMessageById(assistantMessageId, {
           content: cleanContent,
-          timestamp: new Date(),
-          deletionPreview: preview,
-        }];
-      });
+          status: "done",
+          deletionPreview: preview || undefined,
+        });
+      } else {
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.role === "assistant" && last.id === assistantId) {
+            return prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, content: cleanContent, status: "done" as MessageStatus, deletionPreview: preview || m.deletionPreview }
+                : m
+            );
+          }
+          if (last?.role === "assistant") {
+            return prev.map((m, i) =>
+              i === prev.length - 1
+                ? { ...m, content: cleanContent, status: "done" as MessageStatus, deletionPreview: preview || m.deletionPreview }
+                : m
+            );
+          }
+          return [...prev, {
+            id: assistantId,
+            role: "assistant" as const,
+            content: cleanContent,
+            timestamp: new Date(),
+            status: "done" as MessageStatus,
+            deletionPreview: preview,
+          }];
+        });
+      }
     };
 
     while (true) {
@@ -307,9 +386,13 @@ export function AssistantChat() {
       await streamChat({ messages: conversationHistory });
     } catch (error) {
       console.error("Error sending message:", error);
+      const msg = error instanceof Error ? error.message : "";
+      const isNetworkError = msg === "Failed to fetch" || msg.includes("NetworkError") || msg.includes("Load failed");
       toast({
-        title: "Erro",
-        description: error instanceof Error ? error.message : "Não foi possível enviar a mensagem",
+        title: "Erro ao conectar com o Odin",
+        description: isNetworkError
+          ? "Verifique sua conexão. Se estiver em produção, confira se a Edge Function clara-chat está publicada e se GEMINI_API_KEY está nos Secrets do Supabase."
+          : (msg || "Não foi possível enviar a mensagem"),
         variant: "destructive",
       });
       setMessages(prev => prev.filter(m => m.id !== userMessage.id));
@@ -318,8 +401,82 @@ export function AssistantChat() {
     }
   };
 
+  const QUICK_ACTIONS: { label: string; quickAction: string }[] = [
+    { label: "📊 Diagnóstico de economia", quickAction: "diagnostico_periodo_total" },
+    { label: "🎯 Ver metas do mês", quickAction: "ver_metas_mes" },
+    { label: "📋 Verificar pendências", quickAction: "verificar_pendencias" },
+    { label: "📜 Listar regras automáticas", quickAction: "listar_regras" },
+    { label: "💡 Sugestões de economia", quickAction: "diagnostico_periodo_total" },
+  ];
+
+  const handleQuickAction = async (label: string, quickAction: string) => {
+    if (!currentHousehold || isTyping) return;
+
+    const requestId = `qa-${Date.now()}`;
+    const userMessage: Message = {
+      id: `user-${requestId}`,
+      role: "user",
+      content: label,
+      timestamp: new Date(),
+    };
+    setMessages((prev) => [...prev, userMessage]);
+
+    const assistantId = appendAssistantLoadingMessage(requestId);
+    setIsTyping(true);
+
+    const chatMessages = [
+      ...messages.map((m) => ({ role: m.role, content: m.content })),
+      { role: "user" as const, content: label },
+    ];
+    const retryPayload = { messages: chatMessages, quickAction };
+
+    try {
+      await streamChat({
+        messages: chatMessages,
+        assistantMessageId: assistantId,
+        quickAction,
+      });
+    } catch (error) {
+      console.error("Quick action error:", error);
+      const msg = error instanceof Error ? error.message : "Não foi possível concluir.";
+      setMessageErrorById(assistantId, `**Falhou**\n\n${msg}`, retryPayload);
+      toast({
+        title: "Ação falhou",
+        description: msg,
+        variant: "destructive",
+      });
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
   const handleSuggestionClick = (suggestion: string) => {
+    const match = QUICK_ACTIONS.find((a) => a.label === suggestion);
+    if (match) {
+      handleQuickAction(match.label, match.quickAction);
+      return;
+    }
     setInput(suggestion);
+  };
+
+  const handleRetry = async (message: Message) => {
+    if (!message.retryPayload || isTyping) return;
+    const { messages: chatMessages, quickAction } = message.retryPayload;
+    updateMessageById(message.id, { content: "Processando…", status: "loading" });
+    setIsTyping(true);
+    try {
+      await streamChat({
+        messages: chatMessages,
+        assistantMessageId: message.id,
+        quickAction,
+      });
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : "Erro ao tentar novamente.";
+      setMessageErrorById(message.id, `**Falhou**\n\n${errMsg}`, message.retryPayload);
+      toast({ title: "Falhou de novo", description: errMsg, variant: "destructive" });
+    } finally {
+      setIsTyping(false);
+    }
   };
 
   const handleDeletionClick = (preview: DestructiveActionPreview) => {
@@ -448,9 +605,30 @@ export function AssistantChat() {
                 )}
               >
                 {message.role === "assistant" ? (
-                  <div className="prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed [&>p]:mb-2 [&>ul]:mb-2 [&>ul]:ml-4 [&>ol]:mb-2 [&>ol]:ml-4 [&_strong]:text-accent [&_strong]:font-semibold">
-                    <ReactMarkdown>{message.content}</ReactMarkdown>
-                  </div>
+                  <>
+                    {message.status === "loading" && (
+                      <div className="flex items-center gap-2 text-muted-foreground text-sm">
+                        <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
+                        <span>{message.content || "Processando…"}</span>
+                      </div>
+                    )}
+                    {message.status !== "loading" && (
+                      <div className="prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed [&>p]:mb-2 [&>ul]:mb-2 [&>ul]:ml-4 [&>ol]:mb-2 [&>ol]:ml-4 [&_strong]:text-accent [&_strong]:font-semibold">
+                        <ReactMarkdown>{message.content}</ReactMarkdown>
+                      </div>
+                    )}
+                    {message.status === "error" && message.retryPayload && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-2"
+                        onClick={() => handleRetry(message)}
+                        disabled={isTyping}
+                      >
+                        Tentar novamente
+                      </Button>
+                    )}
+                  </>
                 ) : (
                   <div className="text-sm leading-relaxed">{message.content}</div>
                 )}
@@ -494,22 +672,17 @@ export function AssistantChat() {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Quick Suggestions - Enhanced with actionable prompts */}
+      {/* Quick actions - one loading message, then update with result */}
       <div className="px-4 py-2 border-t border-border">
         <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-2">
-          {[
-            "📊 Diagnóstico de economia",
-            "🎯 Ver metas do mês",
-            "📋 Verificar pendências",
-            "📜 Listar regras automáticas",
-            "💡 Sugestões de economia",
-          ].map((suggestion) => (
+          {QUICK_ACTIONS.map(({ label, quickAction }) => (
             <button
-              key={suggestion}
-              onClick={() => handleSuggestionClick(suggestion)}
-              className="flex-shrink-0 px-4 py-2 bg-muted/50 text-muted-foreground text-sm rounded-full hover:bg-muted transition-colors"
+              key={quickAction}
+              onClick={() => handleQuickAction(label, quickAction)}
+              disabled={isTyping || !currentHousehold}
+              className="flex-shrink-0 px-4 py-2 bg-muted/50 text-muted-foreground text-sm rounded-full hover:bg-muted transition-colors disabled:opacity-50"
             >
-              {suggestion}
+              {label}
             </button>
           ))}
         </div>

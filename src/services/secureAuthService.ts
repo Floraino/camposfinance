@@ -17,7 +17,7 @@ interface PasswordResetResult {
   error?: string;
 }
 
-// Secure login with rate limiting
+// Secure login with rate limiting. Falls back to direct Supabase auth if Edge Function is unavailable (e.g. new project).
 export async function secureLogin(
   email: string,
   password: string
@@ -36,6 +36,15 @@ export async function secureLogin(
     });
 
     const data = await response.json();
+
+    // Edge Function not deployed (404) or server error → try direct login
+    if (response.status === 404 || response.status >= 500) {
+      const direct = await supabase.auth.signInWithPassword({ email, password });
+      if (direct.error) {
+        return { success: false, error: direct.error.message };
+      }
+      return { success: true };
+    }
 
     if (!response.ok) {
       return {
@@ -56,11 +65,23 @@ export async function secureLogin(
 
     return { success: true };
   } catch (error) {
-    console.error("Secure login error:", error);
-    return {
-      success: false,
-      error: "Erro de conexão. Verifique sua internet.",
-    };
+    // Network/CORS/connection error → fallback to direct login
+    try {
+      const direct = await supabase.auth.signInWithPassword({ email, password });
+      if (direct.error) {
+        return {
+          success: false,
+          error: direct.error.message || "Erro de conexão. Verifique sua internet.",
+        };
+      }
+      return { success: true };
+    } catch (fallbackError) {
+      console.error("Secure login error:", fallbackError);
+      return {
+        success: false,
+        error: "Erro de conexão. Verifique sua internet e a URL/chave do Supabase no .env",
+      };
+    }
   }
 }
 

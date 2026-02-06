@@ -51,7 +51,7 @@ serve(async (req) => {
     const customerId = customers.data[0].id;
     logStep("Found Stripe customer", { customerId });
 
-    const origin = req.headers.get("origin") || "https://camposfinance.lovable.app";
+    const origin = req.headers.get("origin") || Deno.env.get("APP_ORIGIN") || "http://localhost:5173";
     
     const portalSession = await stripe.billingPortal.sessions.create({
       customer: customerId,

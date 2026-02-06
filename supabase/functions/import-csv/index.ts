@@ -30,16 +30,28 @@ serve(async (req) => {
   }
 
   try {
+    const traceId = crypto.randomUUID().slice(0, 8);
+    console.log(`[import-csv][${traceId}] Request received`);
+
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
       return new Response(
-        JSON.stringify({ error: "Não autorizado" }),
+        JSON.stringify({ error: "Não autorizado", code: "UNAUTHORIZED" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const supabaseKey = Deno.env.get("SUPABASE_ANON_KEY");
+    
+    if (!supabaseUrl || !supabaseKey) {
+      console.error(`[import-csv][${traceId}] Missing SUPABASE_URL or SUPABASE_ANON_KEY`);
+      return new Response(
+        JSON.stringify({ error: "Configuração do servidor incompleta", code: "SERVER_MISCONFIGURED" }),
+        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     const supabase = createClient(supabaseUrl, supabaseKey, {
       global: { headers: { Authorization: authHeader } },
     });
@@ -55,19 +67,31 @@ serve(async (req) => {
 
     const { householdId, transactions, skipDuplicates = true } = await req.json();
 
+    console.log(`[import-csv][${traceId}] User: ${user.id}`);
+
     if (!householdId) {
       return new Response(
-        JSON.stringify({ error: "householdId é obrigatório" }),
+        JSON.stringify({ error: "householdId é obrigatório", code: "MISSING_HOUSEHOLD" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     if (!transactions || !Array.isArray(transactions) || transactions.length === 0) {
       return new Response(
-        JSON.stringify({ error: "Nenhuma transação para importar" }),
+        JSON.stringify({ error: "Nenhuma transação para importar", code: "EMPTY_TRANSACTIONS" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
+
+    // Limit number of transactions per import (prevent abuse)
+    if (transactions.length > 2000) {
+      return new Response(
+        JSON.stringify({ error: "Máximo de 2000 transações por importação", code: "TOO_MANY_TRANSACTIONS" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    console.log(`[import-csv][${traceId}] Importing ${transactions.length} transactions for household=${householdId}`);
 
     // Validate membership
     const { data: membership, error: memberError } = await supabase
@@ -85,18 +109,29 @@ serve(async (req) => {
       );
     }
 
-    // Check PRO plan for CSV import
-    const { data: planData } = await supabase
-      .from("household_plans")
-      .select("plan")
-      .eq("household_id", householdId)
-      .single();
+    // Check PRO plan for CSV import (gracefully handle missing table/migration)
+    try {
+      const { data: planData, error: planError } = await supabase
+        .from("household_plans")
+        .select("plan")
+        .eq("household_id", householdId)
+        .single();
 
-    if (planData?.plan !== "PRO") {
-      return new Response(
-        JSON.stringify({ error: "Importação CSV é um recurso PRO" }),
-        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      if (planError) {
+        // If table doesn't exist or no plan row, allow (dev mode / migration not applied)
+        if (planError.code === "42P01" || planError.code === "PGRST116") {
+          console.warn(`[import-csv][${traceId}] household_plans check failed (allowing): ${planError.message}`);
+        } else {
+          console.warn(`[import-csv][${traceId}] Plan check error: ${planError.message}`);
+        }
+      } else if (planData?.plan !== "PRO") {
+        return new Response(
+          JSON.stringify({ error: "Importação CSV é um recurso PRO", code: "PRO_REQUIRED" }),
+          { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    } catch (planCheckErr) {
+      console.warn(`[import-csv][${traceId}] Plan check exception (allowing):`, planCheckErr);
     }
 
     // Check for duplicates if enabled
@@ -203,28 +238,38 @@ serve(async (req) => {
       }
     }
 
-    // Log audit
-    await supabase.from("admin_audit_logs").insert({
-      admin_user_id: user.id,
-      action_type: "CSV_IMPORT",
-      target_type: "transactions",
-      target_id: householdId,
-      metadata: {
-        total: transactions.length,
-        imported: result.imported,
-        duplicates: result.duplicates,
-        failed: result.failed,
-      },
-    });
+    // Log audit (don't fail the import if audit fails)
+    try {
+      await supabase.from("admin_audit_logs").insert({
+        admin_user_id: user.id,
+        action_type: "CSV_IMPORT",
+        target_type: "transactions",
+        target_id: householdId,
+        metadata: {
+          total: transactions.length,
+          imported: result.imported,
+          duplicates: result.duplicates,
+          failed: result.failed,
+        },
+      });
+    } catch (auditError) {
+      // Audit logging is best-effort; don't fail the import
+      console.warn(`[import-csv][${traceId}] Audit log failed (non-blocking):`, auditError);
+    }
+
+    console.log(`[import-csv][${traceId}] Done: imported=${result.imported}, duplicates=${result.duplicates}, failed=${result.failed}`);
 
     return new Response(
       JSON.stringify(result),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
-    console.error("Import error:", error);
+    console.error("[import-csv] Unhandled error:", error);
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : "Erro desconhecido" }),
+      JSON.stringify({ 
+        error: error instanceof Error ? error.message : "Erro desconhecido",
+        code: "INTERNAL_ERROR" 
+      }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

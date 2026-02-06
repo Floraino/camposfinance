@@ -348,7 +348,9 @@ export function SplitDetailSheet({ splitId, open, onOpenChange, onUpdated }: Spl
           open={addParticipantOpen}
           onOpenChange={setAddParticipantOpen}
           splitEvent={split}
-          existingParticipantIds={participants.map(p => p.participant_household_id)}
+          existingParticipantUserIds={participants
+            .map(p => p.participant_user_id)
+            .filter((id): id is string => id !== null)}
           onAdded={handleParticipantUpdated}
         />
       )}

@@ -95,7 +95,7 @@ serve(async (req) => {
     }
 
     const priceId = PRICE_IDS[priceType as keyof typeof PRICE_IDS];
-    const origin = req.headers.get("origin") || "https://camposfinance.lovable.app";
+    const origin = req.headers.get("origin") || Deno.env.get("APP_ORIGIN") || "http://localhost:5173";
 
     // Create checkout session
     const session = await stripe.checkout.sessions.create({

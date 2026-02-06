@@ -110,14 +110,31 @@ serve(async (req) => {
   }
 
   try {
+    const traceId = crypto.randomUUID().slice(0, 8);
+    console.log(`[analyze-csv][${traceId}] Request received`);
+
     const { csvContent, sampleSize = 50 } = await req.json();
 
     if (!csvContent || typeof csvContent !== "string") {
       return new Response(
-        JSON.stringify({ error: "CSV content is required" }),
+        JSON.stringify({ error: "CSV content is required", code: "MISSING_CSV" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
+
+    // Validate CSV size (max 5MB)
+    if (csvContent.length > 5 * 1024 * 1024) {
+      return new Response(
+        JSON.stringify({ 
+          error: "CSV muito grande", 
+          code: "CSV_TOO_LARGE",
+          details: `Tamanho: ${(csvContent.length / 1024 / 1024).toFixed(1)}MB. Máximo: 5MB.`
+        }),
+        { status: 413, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    console.log(`[analyze-csv][${traceId}] CSV size: ${(csvContent.length / 1024).toFixed(0)}KB`);
 
     // Detect separator
     const firstLines = csvContent.split(/\r?\n/).slice(0, 10).filter(l => l.trim());
@@ -170,12 +187,12 @@ serve(async (req) => {
     const hasEntradaSaida = entradaIndex >= 0 && saidaIndex >= 0;
 
     // Use AI to analyze the CSV structure
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
     
     let columnMappings: ColumnMapping[] = [];
     let dateFormat = "dd/MM/yyyy";
     
-    if (LOVABLE_API_KEY) {
+    if (GEMINI_API_KEY) {
       const sampleData = {
         headers,
         rows: dataRows.slice(0, 10),
@@ -230,48 +247,61 @@ Respond ONLY with valid JSON in this exact format:
 }`;
 
       try {
-        const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        console.log(`[analyze-csv][${traceId}] Calling Gemini for column mapping...`);
+        const aiStartTime = Date.now();
+
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+        const aiResponse = await fetch(geminiUrl, {
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${LOVABLE_API_KEY}`,
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            model: "google/gemini-3-flash-preview",
-            messages: [
-              { role: "system", content: "You are a CSV analysis expert for Brazilian bank statements. Respond only with valid JSON." },
-              { role: "user", content: aiPrompt },
-            ],
-            temperature: 0.1,
+            contents: [{ role: "user", parts: [{ text: aiPrompt }] }],
+            systemInstruction: { parts: [{ text: "You are a CSV analysis expert for Brazilian bank statements. Respond only with valid JSON." }] },
+            generationConfig: { temperature: 0.1, maxOutputTokens: 2048 },
           }),
         });
 
+        const aiDuration = Date.now() - aiStartTime;
+        console.log(`[analyze-csv][${traceId}] Gemini response: status=${aiResponse.status}, duration=${aiDuration}ms`);
+
         if (aiResponse.ok) {
           const aiData = await aiResponse.json();
-          const aiContent = aiData.choices?.[0]?.message?.content || "";
+          const aiContent = aiData.candidates?.[0]?.content?.parts
+            ?.map((p: any) => p.text).filter(Boolean).join("") || "";
           
           const jsonMatch = aiContent.match(/\{[\s\S]*\}/);
           if (jsonMatch) {
-            const aiAnalysis = JSON.parse(jsonMatch[0]);
-            dateFormat = aiAnalysis.dateFormat || "dd/MM/yyyy";
-            
-            columnMappings = (aiAnalysis.mappings || [])
-              .filter((m: any) => !emptyColumns.has(m.csvIndex))
-              .map((m: any) => ({
-                csvColumn: headers[m.csvIndex] || `Coluna ${m.csvIndex + 1}`,
-                csvIndex: m.csvIndex,
-                internalField: m.internalField,
-                confidence: m.confidence,
-              }));
+            try {
+              const aiAnalysis = JSON.parse(jsonMatch[0]);
+              dateFormat = aiAnalysis.dateFormat || "dd/MM/yyyy";
+              
+              columnMappings = (aiAnalysis.mappings || [])
+                .filter((m: any) => !emptyColumns.has(m.csvIndex))
+                .map((m: any) => ({
+                  csvColumn: headers[m.csvIndex] || `Coluna ${m.csvIndex + 1}`,
+                  csvIndex: m.csvIndex,
+                  internalField: m.internalField,
+                  confidence: m.confidence,
+                }));
+              console.log(`[analyze-csv][${traceId}] Gemini mapped ${columnMappings.length} columns`);
+            } catch (parseErr) {
+              console.error(`[analyze-csv][${traceId}] Failed to parse Gemini JSON response:`, parseErr);
+            }
+          } else {
+            console.warn(`[analyze-csv][${traceId}] Gemini response did not contain valid JSON`);
           }
+        } else {
+          const errText = await aiResponse.text();
+          console.error(`[analyze-csv][${traceId}] Gemini API error ${aiResponse.status}: ${errText.substring(0, 200)}`);
         }
       } catch (aiError) {
-        console.error("AI API error, falling back to rules:", aiError);
+        console.error(`[analyze-csv][${traceId}] Gemini API error, falling back to rules:`, aiError);
       }
     }
     
     // Fallback or supplement with rule-based detection
     if (columnMappings.length === 0) {
+      console.log(`[analyze-csv][${traceId}] Using rule-based detection (AI unavailable or returned no mappings)`);
       columnMappings = detectWithRules(headers, dataRows, separator, emptyColumns, hasEntradaSaida, entradaIndex, saidaIndex);
     }
 
@@ -366,14 +396,19 @@ Respond ONLY with valid JSON in this exact format:
       rowAnalysis,
     };
 
+    console.log(`[analyze-csv][${traceId}] Done: ${columnMappings.length} mappings, ${rowAnalysis.filter(r => r.status === "OK").length} valid rows, separator="${separator}"`);
+
     return new Response(
       JSON.stringify(result),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
-    console.error("Error analyzing CSV:", error);
+    console.error("[analyze-csv] Unhandled error:", error);
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
+      JSON.stringify({ 
+        error: error instanceof Error ? error.message : "Erro desconhecido",
+        code: "INTERNAL_ERROR" 
+      }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

@@ -26,6 +26,8 @@ export interface AdminStats {
 }
 
 export async function getAdminStats(): Promise<AdminStats> {
+  // Uses direct queries. The RLS policy "Super admins can view all profiles"
+  // (from migration 20260204003715) allows super_admins to see all rows.
   const [households, users, proPlans, coupons] = await Promise.all([
     supabase.from("households").select("id", { count: "exact", head: true }),
     supabase.from("profiles").select("id", { count: "exact", head: true }),
@@ -141,20 +143,34 @@ export interface AdminUser {
   households_count?: number;
 }
 
-export async function getAdminUsers(search?: string): Promise<AdminUser[]> {
-  let query = supabase
+export async function getAdminUsers(search?: string, page = 0, pageSize = 50): Promise<{ data: AdminUser[]; total: number }> {
+  // Direct query — works thanks to RLS policy "Super admins can view all profiles".
+  // No custom RPCs needed.
+  const from = page * pageSize;
+  const to = from + pageSize - 1;
+
+  // Count query (with optional search filter)
+  let countQuery = supabase.from("profiles").select("id", { count: "exact", head: true });
+  if (search?.trim()) {
+    countQuery = countQuery.ilike("display_name", `%${search.trim()}%`);
+  }
+  const { count: totalCount } = await countQuery;
+
+  // Data query (paginated)
+  let dataQuery = supabase
     .from("profiles")
     .select("*")
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false })
+    .range(from, to);
 
-  if (search) {
-    query = query.ilike("display_name", `%${search}%`);
+  if (search?.trim()) {
+    dataQuery = dataQuery.ilike("display_name", `%${search.trim()}%`);
   }
 
-  const { data, error } = await query.limit(100);
+  const { data, error } = await dataQuery;
   if (error) throw error;
 
-  // Fetch roles and household counts
+  // Enrich with role and household count
   const usersWithData = await Promise.all(
     (data || []).map(async (profile) => {
       const [role, households] = await Promise.all([
@@ -170,7 +186,29 @@ export async function getAdminUsers(search?: string): Promise<AdminUser[]> {
     })
   );
 
-  return usersWithData;
+  return { data: usersWithData, total: totalCount || 0 };
+}
+
+// Get single user details (for detail drawer).
+export async function getAdminUser(userId: string): Promise<AdminUser | null> {
+  const { data: profile, error } = await supabase
+    .from("profiles")
+    .select("*")
+    .eq("user_id", userId)
+    .single();
+
+  if (error || !profile) return null;
+
+  const [role, households] = await Promise.all([
+    supabase.from("user_roles").select("role").eq("user_id", userId).single(),
+    supabase.from("household_members").select("id", { count: "exact", head: true }).eq("user_id", userId),
+  ]);
+
+  return {
+    ...profile,
+    role: role.data?.role || "user",
+    households_count: households.count || 0,
+  };
 }
 
 // Block/unblock user
@@ -449,10 +487,12 @@ export async function updateHouseholdName(householdId: string, name: string): Pr
   if (auditError) console.error("Failed to log audit:", auditError);
 }
 
-// Delete user profile (does not delete auth user, just profile)
+// Delete user profile (does not delete auth user, just profile).
+// Prevents self-delete.
 export async function deleteUserProfile(userId: string): Promise<void> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Não autenticado");
+  if (user.id === userId) throw new Error("Você não pode excluir sua própria conta.");
 
   // Get user info before deletion for audit
   const { data: profileData } = await supabase

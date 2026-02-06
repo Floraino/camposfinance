@@ -40,7 +40,7 @@ export function parseDeepLink(url: string): {
       };
     }
 
-    // Handle HTTPS universal links: https://camposfinance.lovable.app/billing/success
+    // Handle HTTPS universal links
     if (url.startsWith("https://")) {
       const urlObj = new URL(url);
       return {

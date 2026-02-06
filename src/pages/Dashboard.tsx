@@ -105,22 +105,41 @@ export default function Dashboard() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
 
-      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/clara-chat`, {
+      const baseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      if (!baseUrl || baseUrl === "undefined") {
+        setOdinInsight("Configure VITE_SUPABASE_URL no .env para ver dicas do Odin.");
+        return;
+      }
+      if (!anonKey || anonKey === "undefined") {
+        setOdinInsight("Configure VITE_SUPABASE_PUBLISHABLE_KEY no .env.");
+        return;
+      }
+
+      const response = await fetch(`${baseUrl}/functions/v1/clara-chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${session.access_token}`,
+          apikey: anonKey,
         },
         body: JSON.stringify({
           messages: [{ 
             role: "user", 
             content: "Me dê uma dica rápida e objetiva (máximo 2 frases curtas) sobre meus gastos deste mês. Seja direto e útil." 
           }],
-          quickInsight: true,
+          householdId: currentHousehold?.id,
         }),
       });
 
-      if (!response.ok) throw new Error("Failed to fetch insight");
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        if (response.status === 503 && err.code === "AI_NOT_CONFIGURED") {
+          setOdinInsight("Configure GEMINI_API_KEY nas Edge Functions do Supabase para dicas do Odin.");
+          return;
+        }
+        throw new Error(err.error || "Failed to fetch insight");
+      }
 
       const reader = response.body?.getReader();
       if (!reader) throw new Error("No reader");
@@ -149,17 +168,21 @@ export default function Dashboard() {
       setOdinInsight(insightText || "Analisando seus padrões de gastos... 🔍");
     } catch (error) {
       console.error("Error fetching insight:", error);
-      setOdinInsight("Toque para ver análise completa das suas finanças 💡");
+      const msg = error instanceof Error ? error.message : "";
+      const isNetworkError = msg === "Failed to fetch" || msg.includes("NetworkError");
+      setOdinInsight(isNetworkError
+        ? "Não foi possível conectar ao Odin. Verifique a conexão e a Edge Function clara-chat."
+        : "Toque para ver análise completa das suas finanças 💡");
     } finally {
       setIsLoadingInsight(false);
     }
   };
 
   useEffect(() => {
-    if (transactions.length > 0 && !isLoading) {
+    if (transactions.length > 0 && !isLoading && currentHousehold?.id) {
       fetchOdinInsight(transactions);
     }
-  }, [transactions.length, isLoading]);
+  }, [transactions.length, isLoading, currentHousehold?.id]);
 
   const handleAddTransaction = async (newTx: NewTransaction) => {
     if (!currentHousehold?.id) return;

@@ -96,7 +96,18 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
     if (!file.name.toLowerCase().endsWith(".csv")) {
       toast({
         title: "Arquivo inválido",
-        description: "Por favor, selecione um arquivo CSV",
+        description: "Por favor, selecione um arquivo CSV (.csv)",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // File size limit (5MB)
+    const MAX_FILE_SIZE = 5 * 1024 * 1024;
+    if (file.size > MAX_FILE_SIZE) {
+      toast({
+        title: "Arquivo muito grande",
+        description: `Tamanho máximo: 5MB. Seu arquivo: ${(file.size / 1024 / 1024).toFixed(1)}MB`,
         variant: "destructive",
       });
       return;

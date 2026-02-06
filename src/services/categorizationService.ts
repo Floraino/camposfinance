@@ -1,41 +1,64 @@
 import { supabase } from "@/integrations/supabase/client";
 import type { CategoryType } from "@/components/ui/CategoryBadge";
 
-const CATEGORIZE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/categorize-transaction`;
-
+/**
+ * Categorize a single description using the edge function.
+ * Uses supabase.functions.invoke (sends session token automatically).
+ * Falls back to local keyword matching if edge function is unavailable.
+ */
 export async function categorizeDescription(description: string): Promise<CategoryType> {
   if (!description || description.length < 3) {
     return "other";
   }
 
+  // Local keyword matching first (fast path, works without Edge Function)
+  const localResult = localCategorize(description);
+  if (localResult !== "other") return localResult;
+
   try {
-    const response = await fetch(CATEGORIZE_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-      },
-      body: JSON.stringify({ description }),
+    const { data, error } = await supabase.functions.invoke("categorize-transaction", {
+      body: { description },
     });
 
-    if (!response.ok) {
+    if (error) {
+      console.warn("[categorize] Edge function error (using local fallback):", error.message);
       return "other";
     }
 
-    const data = await response.json();
-    return (data.category as CategoryType) || "other";
-  } catch (error) {
-    console.error("Error categorizing:", error);
+    return (data?.category as CategoryType) || "other";
+  } catch (err) {
+    console.warn("[categorize] Network error (using local fallback):", err);
     return "other";
   }
 }
 
-export async function categorizeAllTransactions(): Promise<{ updated: number; errors: string[] }> {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session) {
-    throw new Error("Usuário não autenticado");
-  }
+// Local keyword matching (runs without backend)
+const LOCAL_KEYWORDS: Record<string, CategoryType> = {
+  mercado: "food", supermercado: "food", restaurante: "food", lanche: "food",
+  padaria: "food", ifood: "food", "uber eats": "food", delivery: "food",
+  açougue: "food", feira: "food", almoço: "food", jantar: "food", café: "food",
+  uber: "transport", "99": "transport", gasolina: "transport", combustível: "transport",
+  estacionamento: "transport", pedágio: "transport", ônibus: "transport",
+  luz: "bills", água: "bills", internet: "bills", telefone: "bills",
+  aluguel: "bills", condomínio: "bills", energia: "bills", celular: "bills",
+  farmácia: "health", médico: "health", hospital: "health", dentista: "health",
+  plano: "health", drogaria: "health", academia: "health",
+  escola: "education", faculdade: "education", curso: "education", livro: "education",
+  roupa: "shopping", sapato: "shopping", loja: "shopping", amazon: "shopping",
+  "mercado livre": "shopping", magazine: "shopping", shopping: "shopping",
+  cinema: "leisure", netflix: "leisure", spotify: "leisure", disney: "leisure",
+  viagem: "leisure", hotel: "leisure", bar: "leisure", show: "leisure",
+};
 
+function localCategorize(description: string): CategoryType {
+  const lower = description.toLowerCase();
+  for (const [keyword, category] of Object.entries(LOCAL_KEYWORDS)) {
+    if (lower.includes(keyword)) return category;
+  }
+  return "other";
+}
+
+export async function categorizeAllTransactions(): Promise<{ updated: number; errors: string[] }> {
   // Get all transactions with 'other' category or uncategorized
   const { data: transactions, error } = await supabase
     .from("transactions")
@@ -47,25 +70,36 @@ export async function categorizeAllTransactions(): Promise<{ updated: number; er
     return { updated: 0, errors: [] };
   }
 
-  // Send to AI for batch categorization
-  const response = await fetch(CATEGORIZE_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${session.access_token}`,
-    },
-    body: JSON.stringify({
-      categorizeAll: true,
-      descriptions: transactions.map(t => ({ id: t.id, description: t.description })),
-    }),
-  });
+  // Try AI batch categorization first; fall back to local if edge function unavailable
+  let categories: { id: string; category: string }[] = [];
 
-  if (!response.ok) {
-    throw new Error("Erro ao categorizar transações");
+  try {
+    const { data: aiData, error: aiError } = await supabase.functions.invoke(
+      "categorize-transaction",
+      {
+        body: {
+          categorizeAll: true,
+          descriptions: transactions.map((t) => ({ id: t.id, description: t.description })),
+        },
+      }
+    );
+
+    if (!aiError && aiData?.categories) {
+      categories = aiData.categories;
+    } else {
+      console.warn("[categorizeAll] Edge function unavailable, using local fallback:", aiError?.message);
+      categories = transactions.map((t) => ({
+        id: t.id,
+        category: localCategorize(t.description),
+      }));
+    }
+  } catch (networkErr) {
+    console.warn("[categorizeAll] Network error, using local fallback:", networkErr);
+    categories = transactions.map((t) => ({
+      id: t.id,
+      category: localCategorize(t.description),
+    }));
   }
-
-  const data = await response.json();
-  const categories: { id: string; category: string }[] = data.categories || [];
 
   let updated = 0;
   const errors: string[] = [];
@@ -90,11 +124,6 @@ export async function categorizeAllTransactions(): Promise<{ updated: number; er
 }
 
 export async function recategorizeAllTransactions(): Promise<{ updated: number; errors: string[] }> {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session) {
-    throw new Error("Usuário não autenticado");
-  }
-
   // Get ALL transactions
   const { data: transactions, error } = await supabase
     .from("transactions")
@@ -105,32 +134,43 @@ export async function recategorizeAllTransactions(): Promise<{ updated: number; 
     return { updated: 0, errors: [] };
   }
 
-  // Send to AI for batch categorization
-  const response = await fetch(CATEGORIZE_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${session.access_token}`,
-    },
-    body: JSON.stringify({
-      categorizeAll: true,
-      descriptions: transactions.map(t => ({ id: t.id, description: t.description })),
-    }),
-  });
+  // Try AI batch categorization; fall back to local if unavailable
+  let categories: { id: string; category: string }[] = [];
 
-  if (!response.ok) {
-    throw new Error("Erro ao categorizar transações");
+  try {
+    const { data: aiData, error: aiError } = await supabase.functions.invoke(
+      "categorize-transaction",
+      {
+        body: {
+          categorizeAll: true,
+          descriptions: transactions.map((t) => ({ id: t.id, description: t.description })),
+        },
+      }
+    );
+
+    if (!aiError && aiData?.categories) {
+      categories = aiData.categories;
+    } else {
+      console.warn("[recategorizeAll] Edge function unavailable, using local fallback:", aiError?.message);
+      categories = transactions.map((t) => ({
+        id: t.id,
+        category: localCategorize(t.description),
+      }));
+    }
+  } catch (networkErr) {
+    console.warn("[recategorizeAll] Network error, using local fallback:", networkErr);
+    categories = transactions.map((t) => ({
+      id: t.id,
+      category: localCategorize(t.description),
+    }));
   }
-
-  const data = await response.json();
-  const categories: { id: string; category: string }[] = data.categories || [];
 
   let updated = 0;
   const errors: string[] = [];
 
   // Update transactions where category changed
   for (const cat of categories) {
-    const original = transactions.find(t => t.id === cat.id);
+    const original = transactions.find((t) => t.id === cat.id);
     if (cat.category && original && cat.category !== original.category) {
       const { error: updateError } = await supabase
         .from("transactions")

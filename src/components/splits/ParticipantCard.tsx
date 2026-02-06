@@ -87,7 +87,7 @@ export function ParticipantCard({
       await removeSplitParticipant(participant.id);
       toast({
         title: "Participante removido",
-        description: "A família foi removida do rateio.",
+        description: `${participant.member_name || participant.household_name || "Participante"} foi removido do rateio.`,
       });
       onUpdated();
     } catch (error: any) {
@@ -146,7 +146,7 @@ export function ParticipantCard({
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
                 <h4 className="font-medium truncate">
-                  {participant.household_name || "Família"}
+                  {participant.member_name || participant.household_name || "Participante"}
                 </h4>
                 <Badge variant="outline" className="shrink-0">
                   {participant.shares}/{totalShares}
@@ -209,7 +209,7 @@ export function ParticipantCard({
           <AlertDialogHeader>
             <AlertDialogTitle>Remover participante?</AlertDialogTitle>
             <AlertDialogDescription>
-              A família {participant.household_name} será removida deste rateio.
+              <strong>{participant.member_name || participant.household_name || "Este participante"}</strong> será removido deste rateio.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -238,8 +238,8 @@ export function ParticipantCard({
           
           <div className="space-y-4">
             <div className="bg-muted p-3 rounded-lg">
-              <p className="text-sm text-muted-foreground">Família</p>
-              <p className="font-semibold">{participant.household_name}</p>
+              <p className="text-sm text-muted-foreground">Participante</p>
+              <p className="font-semibold">{participant.member_name || participant.household_name || "—"}</p>
             </div>
             
             <div className="bg-muted p-3 rounded-lg">

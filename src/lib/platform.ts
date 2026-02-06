@@ -49,7 +49,7 @@ export function canUseStripeInApp(): boolean {
  * This is used when in-app Stripe is not allowed
  */
 export function getSubscriptionWebUrl(householdId: string, priceType: "monthly" | "yearly"): string {
-  const baseUrl = "https://camposfinance.lovable.app";
+  const baseUrl = import.meta.env.VITE_APP_URL || window.location.origin;
   return `${baseUrl}/subscribe?householdId=${householdId}&plan=${priceType}`;
 }
 

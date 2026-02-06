@@ -9,7 +9,13 @@ import {
   Sparkles,
   Trash2,
   Plus,
-  Eye
+  Eye,
+  Clock,
+  CalendarClock,
+  RotateCcw,
+  TrendingUp,
+  BarChart3,
+  Ghost,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -23,12 +29,19 @@ interface PendingItemCardProps {
   processingAction?: string;
 }
 
-const iconMap = {
+const iconMap: Record<string, React.ElementType> = {
   uncategorized: Tag,
   duplicate: Copy,
   pending_split: Users,
   pro_expiring: Crown,
   no_account: AlertTriangle,
+  // v2 smart pending
+  overdue_bill: Clock,
+  upcoming_bill: CalendarClock,
+  missing_recurring: RotateCcw,
+  budget_exceeded: TrendingUp,
+  budget_warning: BarChart3,
+  inactivity: Ghost,
 };
 
 const severityConfig = {
@@ -57,6 +70,12 @@ const actionIcons: Record<string, React.ElementType> = {
   view_split: Eye,
   remind_split: Users,
   renew_pro: Crown,
+  // v2 actions
+  mark_paid: Sparkles,
+  view_transaction: Eye,
+  add_recurring: Plus,
+  add_transaction: Plus,
+  dismiss: Trash2,
 };
 
 export function PendingItemCard({ item, onAction, isProcessing, processingAction }: PendingItemCardProps) {

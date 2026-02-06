@@ -32,6 +32,7 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
   const [paymentMethod, setPaymentMethod] = useState<"pix" | "boleto" | "card" | "cash">("pix");
   const [status, setStatus] = useState<"paid" | "pending">("paid");
   const [isRecurring, setIsRecurring] = useState(false);
+  const [dueDate, setDueDate] = useState<string>("");
   const [isScanning, setIsScanning] = useState(false);
   const [isCategorizing, setIsCategorizing] = useState(false);
   const [memberId, setMemberId] = useState<string | undefined>(undefined);
@@ -236,6 +237,7 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
       status,
       is_recurring: isRecurring,
       member_id: memberId,
+      ...(dueDate ? { due_date: dueDate } : {}),
     });
 
     // Reset form
@@ -245,6 +247,7 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
     setPaymentMethod("pix");
     setStatus("paid");
     setIsRecurring(false);
+    setDueDate("");
     setMemberId(undefined);
     setManualCategorySet(false);
     setAttachedImage(null);
@@ -465,6 +468,22 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
               ⏳ Pendente
             </button>
           </div>
+
+          {/* Due Date (only when pending) */}
+          {status === "pending" && (
+            <div>
+              <label className="text-sm font-medium text-muted-foreground mb-2 block">
+                📅 Data de vencimento
+              </label>
+              <input
+                type="date"
+                value={dueDate}
+                onChange={(e) => setDueDate(e.target.value)}
+                className="w-full h-12 px-4 rounded-xl border-2 border-border bg-muted/50 text-foreground focus:border-primary focus:ring-0 outline-none transition-all"
+                placeholder="Selecione a data"
+              />
+            </div>
+          )}
 
           {/* Family Member Selection */}
           {familyMembers.length > 0 && (

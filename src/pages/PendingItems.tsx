@@ -9,8 +9,10 @@ import {
   getUncategorizedTransactions,
   getDuplicateTransactions,
   type PendingSummary, 
-  type PendingItem 
+  type PendingItem,
+  type PendingItemType,
 } from "@/services/pendingItemsService";
+import { updateTransaction } from "@/services/transactionService";
 import { recategorizeAllTransactions } from "@/services/categorizationService";
 import { Button } from "@/components/ui/button";
 import { 
@@ -135,6 +137,38 @@ export default function PendingItems() {
       navigate("/splits");
     } else if (action === "renew_pro") {
       navigate("/subscribe");
+    } else if (action.startsWith("mark_paid:")) {
+      const txId = action.split(":")[1];
+      if (!txId || !currentHousehold?.id) return;
+      setIsProcessing(true);
+      setProcessingAction(action);
+      try {
+        await updateTransaction(txId, currentHousehold.id, { status: "paid" });
+        toast({ title: "Marcado como pago" });
+        await loadPendingItems();
+      } catch {
+        toast({ title: "Erro ao atualizar", variant: "destructive" });
+      } finally {
+        setIsProcessing(false);
+        setProcessingAction(undefined);
+      }
+    } else if (action.startsWith("view_transaction:")) {
+      navigate("/transactions");
+    } else if (action === "add_transaction") {
+      navigate("/");
+    } else if (action.startsWith("add_recurring:")) {
+      navigate("/");
+    } else if (action.startsWith("dismiss:")) {
+      // Remove item locally (dismiss until next reload)
+      setSummary((prev) => {
+        if (!prev) return prev;
+        const dismissedId = action.replace("dismiss:", "");
+        return {
+          ...prev,
+          items: prev.items.filter((i) => i.id !== dismissedId),
+          total: prev.total - 1,
+        };
+      });
     }
   };
 

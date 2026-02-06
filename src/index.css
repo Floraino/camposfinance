@@ -7,8 +7,6 @@
    Cores: grafite escuro, azul petróleo, verde musgo, bege quente
 */
 
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap');
-
 @layer base {
   :root {
     /* Cores base - tema claro aconchegante */

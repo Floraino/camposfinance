@@ -23,15 +23,37 @@ serve(async (req) => {
   }
 
   try {
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      throw new Error("LOVABLE_API_KEY is not configured");
+    const traceId = crypto.randomUUID().slice(0, 8);
+    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+    if (!GEMINI_API_KEY) {
+      console.warn(`[categorize][${traceId}] GEMINI_API_KEY not configured - using keyword fallback`);
     }
 
     const { description, descriptions, categorizeAll } = await req.json();
 
     // Handle batch categorization for Clara
     if (categorizeAll && descriptions?.length > 0) {
+      console.log(`[categorize][${traceId}] Batch categorization: ${descriptions.length} items`);
+
+      // If no API key, fall back to keyword matching for all descriptions
+      if (!GEMINI_API_KEY) {
+        const categories = descriptions.map((d: { id: string; description: string }) => {
+          const descLower = d.description.toLowerCase();
+          let matched = "other";
+          for (const cat of CATEGORIES) {
+            if (cat.keywords.some(kw => descLower.includes(kw))) {
+              matched = cat.id;
+              break;
+            }
+          }
+          return { id: d.id, category: matched };
+        });
+        console.log(`[categorize][${traceId}] Batch done via keywords (no AI key)`);
+        return new Response(JSON.stringify({ categories }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       const prompt = `Você é um especialista em categorização de despesas financeiras brasileiras.
 
 Categorize cada uma das seguintes descrições de transações em UMA das categorias abaixo:
@@ -50,37 +72,76 @@ ${descriptions.map((d: { id: string; description: string }, i: number) => `${i +
 Responda APENAS com um JSON array no formato:
 [{"id": "uuid", "category": "categoria"}]`;
 
-      const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "google/gemini-3-flash-preview",
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
+      try {
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+        const response = await fetch(geminiUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.1, maxOutputTokens: 4096 },
+          }),
+        });
 
-      if (!response.ok) {
-        throw new Error("AI gateway error");
+        if (!response.ok) {
+          console.error(`[categorize][${traceId}] AI batch error: ${response.status}`);
+          // Fallback to keyword matching
+          const categories = descriptions.map((d: { id: string; description: string }) => {
+            const descLower = d.description.toLowerCase();
+            let matched = "other";
+            for (const cat of CATEGORIES) {
+              if (cat.keywords.some(kw => descLower.includes(kw))) {
+                matched = cat.id;
+                break;
+              }
+            }
+            return { id: d.id, category: matched };
+          });
+          return new Response(JSON.stringify({ categories }), {
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+
+        const data = await response.json();
+        const content = data.candidates?.[0]?.content?.parts
+          ?.map((p: any) => p.text).filter(Boolean).join("") || "[]";
+        
+        // Extract JSON from response
+        const jsonMatch = content.match(/\[[\s\S]*\]/);
+        let categories;
+        try {
+          categories = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
+        } catch (parseErr) {
+          console.error(`[categorize][${traceId}] Failed to parse Gemini batch response`);
+          categories = [];
+        }
+
+        console.log(`[categorize][${traceId}] Batch done via Gemini: ${categories.length} results`);
+        return new Response(JSON.stringify({ categories }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      } catch (batchErr) {
+        console.error(`[categorize][${traceId}] Batch AI error, falling back to keywords:`, batchErr);
+        const categories = descriptions.map((d: { id: string; description: string }) => {
+          const descLower = d.description.toLowerCase();
+          let matched = "other";
+          for (const cat of CATEGORIES) {
+            if (cat.keywords.some(kw => descLower.includes(kw))) {
+              matched = cat.id;
+              break;
+            }
+          }
+          return { id: d.id, category: matched };
+        });
+        return new Response(JSON.stringify({ categories }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
-
-      const data = await response.json();
-      const content = data.choices?.[0]?.message?.content || "[]";
-      
-      // Extract JSON from response
-      const jsonMatch = content.match(/\[[\s\S]*\]/);
-      const categories = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
-
-      return new Response(JSON.stringify({ categories }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
     }
 
     // Single description categorization
     if (!description) {
-      return new Response(JSON.stringify({ category: "other" }), {
+      return new Response(JSON.stringify({ category: "other", confidence: 0 }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -90,10 +151,19 @@ Responda APENAS com um JSON array no formato:
     // First try keyword matching for speed
     for (const cat of CATEGORIES) {
       if (cat.keywords.some(kw => descLower.includes(kw))) {
+        console.log(`[categorize][${traceId}] Keyword match: "${description}" → ${cat.id}`);
         return new Response(JSON.stringify({ category: cat.id, confidence: 0.9 }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
+    }
+
+    // If no API key or no keyword match, return 'other'
+    if (!GEMINI_API_KEY) {
+      console.log(`[categorize][${traceId}] No Gemini key, no keyword match: "${description}" → other`);
+      return new Response(JSON.stringify({ category: "other", confidence: 0.3 }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     // If no keyword match, use AI
@@ -111,38 +181,45 @@ Despesa: "${description}"
 
 Responda APENAS com o ID da categoria (ex: food, transport, etc).`;
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash-lite",
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
+    try {
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+      const response = await fetch(geminiUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.1, maxOutputTokens: 64 },
+        }),
+      });
 
-    if (!response.ok) {
-      // Fallback to 'other' if AI fails
-      return new Response(JSON.stringify({ category: "other", confidence: 0.5 }), {
+      if (!response.ok) {
+        console.warn(`[categorize][${traceId}] Gemini error ${response.status} for "${description}"`);
+        return new Response(JSON.stringify({ category: "other", confidence: 0.3 }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const data = await response.json();
+      const aiCategory = (data.candidates?.[0]?.content?.parts
+        ?.map((p: any) => p.text).filter(Boolean).join("") || "other").trim().toLowerCase();
+      
+      // Validate category
+      const validCategories = ["food", "transport", "bills", "health", "education", "shopping", "leisure", "other"];
+      const finalCategory = validCategories.includes(aiCategory) ? aiCategory : "other";
+
+      console.log(`[categorize][${traceId}] AI: "${description}" → ${finalCategory}`);
+      return new Response(JSON.stringify({ category: finalCategory, confidence: 0.8 }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    } catch (aiErr) {
+      console.warn(`[categorize][${traceId}] AI call failed for "${description}":`, aiErr);
+      return new Response(JSON.stringify({ category: "other", confidence: 0.3 }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-
-    const data = await response.json();
-    const aiCategory = data.choices?.[0]?.message?.content?.trim().toLowerCase() || "other";
-    
-    // Validate category
-    const validCategories = ["food", "transport", "bills", "health", "education", "shopping", "leisure", "other"];
-    const finalCategory = validCategories.includes(aiCategory) ? aiCategory : "other";
-
-    return new Response(JSON.stringify({ category: finalCategory, confidence: 0.8 }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
   } catch (e) {
-    console.error("categorize-transaction error:", e);
-    return new Response(JSON.stringify({ category: "other", confidence: 0.5 }), {
+    console.error("[categorize] Unhandled error:", e);
+    return new Response(JSON.stringify({ category: "other", confidence: 0 }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }

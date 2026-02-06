@@ -12,6 +12,7 @@ export interface Transaction {
   status: "paid" | "pending";
   is_recurring: boolean;
   transaction_date: string;
+  due_date?: string | null; // v2: vencimento para boletos/contas
   notes: string | null;
   member_id: string | null;
   member_name?: string;
@@ -27,6 +28,7 @@ export interface NewTransaction {
   status: "paid" | "pending";
   is_recurring: boolean;
   transaction_date?: string;
+  due_date?: string | null; // v2: vencimento para boletos/contas
   notes?: string;
   member_id?: string;
 }
@@ -137,6 +139,27 @@ export async function deleteTransaction(id: string, householdId: string): Promis
     .eq("household_id", householdId); // Double-check ownership
 
   if (error) throw error;
+}
+
+// Bulk delete — deletes multiple transactions at once.
+// Each transaction must belong to the given household (RLS + explicit filter).
+export async function deleteTransactionsBulk(ids: string[], householdId: string): Promise<number> {
+  if (!householdId) {
+    throw new Error("householdId é obrigatório para deletar transações");
+  }
+  if (!ids.length) {
+    throw new Error("Nenhuma transação selecionada");
+  }
+
+  const { data, error } = await supabase
+    .from("transactions")
+    .delete()
+    .in("id", ids)
+    .eq("household_id", householdId)
+    .select("id"); // returns deleted rows so we can count
+
+  if (error) throw error;
+  return data?.length ?? 0;
 }
 
 export async function getMonthlyStats(householdId: string, month?: number, year?: number) {
