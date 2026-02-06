@@ -855,6 +855,9 @@ serve(async (req) => {
       verificar_pendencias: "get_pending_items",
       listar_regras: "list_categorization_rules",
       ver_metas_mes: "check_goals_progress",
+      maiores_gastos: "top_expenses",
+      gasto_fora_padrao: "outlier_expenses",
+      orcamento_restante: "budget_remaining",
     };
     if (quickAction && QUICK_ACTION_MAP[quickAction]) {
       const actionType = QUICK_ACTION_MAP[quickAction];
@@ -903,6 +906,94 @@ serve(async (req) => {
                 return `${icon} **${categoryLabels[b.category] || b.category}**: R$ ${b.spent.toFixed(2)} / R$ ${b.amount.toFixed(2)} (${b.percentage}%)`;
               }).join("\n");
               result = { success: true, message: `\n\n🎯 **Progresso das Metas**:\n\n${goalsMsg}\n` };
+            }
+            break;
+          }
+          case "top_expenses": {
+            // Top 10 expenses of current month
+            const now = new Date();
+            const startOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+            const endOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()}`;
+            const { data: topTxs } = await supabase.from("transactions")
+              .select("description, amount, category, transaction_date")
+              .eq("household_id", householdId)
+              .gte("transaction_date", startOfMonth)
+              .lte("transaction_date", endOfMonth)
+              .lt("amount", 0)
+              .order("amount", { ascending: true })
+              .limit(10);
+            if (!topTxs || topTxs.length === 0) {
+              result = { success: true, message: "Nenhum gasto registrado este mês." };
+            } else {
+              const topList = topTxs.map((t: any, i: number) => `${i + 1}. **${t.description}** — R$ ${Math.abs(t.amount).toFixed(2)} (${categoryLabels[t.category] || t.category})`).join("\n");
+              result = { success: true, message: `\n\n💰 **Maiores Gastos do Mês**:\n\n${topList}\n` };
+            }
+            break;
+          }
+          case "outlier_expenses": {
+            // Find expenses significantly above average for their category
+            const now2 = new Date();
+            const som = `${now2.getFullYear()}-${String(now2.getMonth() + 1).padStart(2, "0")}-01`;
+            const eom = `${now2.getFullYear()}-${String(now2.getMonth() + 1).padStart(2, "0")}-${new Date(now2.getFullYear(), now2.getMonth() + 1, 0).getDate()}`;
+            const { data: monthTxs } = await supabase.from("transactions")
+              .select("description, amount, category")
+              .eq("household_id", householdId)
+              .gte("transaction_date", som)
+              .lte("transaction_date", eom)
+              .lt("amount", 0);
+            if (!monthTxs || monthTxs.length < 3) {
+              result = { success: true, message: "Poucos gastos para detectar outliers." };
+            } else {
+              const catAvg: Record<string, { total: number; count: number }> = {};
+              for (const t of monthTxs) {
+                if (!catAvg[t.category]) catAvg[t.category] = { total: 0, count: 0 };
+                catAvg[t.category].total += Math.abs(t.amount);
+                catAvg[t.category].count++;
+              }
+              const outliers = monthTxs.filter((t: any) => {
+                const avg = catAvg[t.category].total / catAvg[t.category].count;
+                return Math.abs(t.amount) > avg * 2.5 && Math.abs(t.amount) > 50;
+              });
+              if (outliers.length === 0) {
+                result = { success: true, message: "✅ Nenhum gasto fora do padrão detectado!" };
+              } else {
+                const outList = outliers.map((t: any) => `- ⚠️ **${t.description}**: R$ ${Math.abs(t.amount).toFixed(2)} (${categoryLabels[t.category] || t.category})`).join("\n");
+                result = { success: true, message: `\n\n🔍 **Gastos Fora do Padrão**:\n\n${outList}\n` };
+              }
+            }
+            break;
+          }
+          case "budget_remaining": {
+            // Check budget vs spending
+            const { data: budgetData } = await supabase.from("budgets")
+              .select("amount")
+              .eq("household_id", householdId)
+              .eq("period_type", "monthly")
+              .order("start_date", { ascending: false })
+              .limit(1);
+            const now3 = new Date();
+            const som3 = `${now3.getFullYear()}-${String(now3.getMonth() + 1).padStart(2, "0")}-01`;
+            const eom3 = `${now3.getFullYear()}-${String(now3.getMonth() + 1).padStart(2, "0")}-${new Date(now3.getFullYear(), now3.getMonth() + 1, 0).getDate()}`;
+            const { data: expTxs } = await supabase.from("transactions")
+              .select("amount")
+              .eq("household_id", householdId)
+              .gte("transaction_date", som3)
+              .lte("transaction_date", eom3)
+              .lt("amount", 0);
+            const totalSpent = (expTxs || []).reduce((s: number, t: any) => s + Math.abs(t.amount), 0);
+            if (!budgetData || budgetData.length === 0) {
+              result = { success: true, message: `💰 Sem orçamento definido. Gastos do mês: R$ ${totalSpent.toFixed(2)}` };
+            } else {
+              const budget = budgetData[0].amount;
+              const remaining = budget - totalSpent;
+              const pct = Math.round((totalSpent / budget) * 100);
+              const daysLeft = new Date(now3.getFullYear(), now3.getMonth() + 1, 0).getDate() - now3.getDate();
+              const perDay = daysLeft > 0 ? remaining / daysLeft : 0;
+              const icon = remaining >= 0 ? "✅" : "🚨";
+              result = {
+                success: true,
+                message: `\n\n💳 **Orçamento do Mês**:\n\n${icon} R$ ${totalSpent.toFixed(2)} / R$ ${budget.toFixed(2)} (${pct}%)\n\nRestante: R$ ${remaining.toFixed(2)}\n${daysLeft > 0 ? `Pode gastar ~R$ ${perDay.toFixed(2)}/dia nos próximos ${daysLeft} dias.` : ""}\n`
+              };
             }
             break;
           }

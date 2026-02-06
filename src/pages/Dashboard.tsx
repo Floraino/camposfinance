@@ -431,7 +431,7 @@ export default function Dashboard() {
 
         {/* Budget Progress */}
         <button 
-          onClick={() => setShowBudgetSheet(true)}
+          onClick={() => navigate("/budget")}
           className="w-full glass-card p-4 mb-6 touch-feedback"
         >
           <div className="flex items-center justify-between mb-3">
@@ -466,7 +466,11 @@ export default function Dashboard() {
               Toque para definir seu orçamento mensal
             </p>
           )}
+          <p className="text-xs text-primary mt-2 underline">Ver painel completo →</p>
         </button>
+
+        {/* Budget panel link - navigates to /budget on click */}
+        {/* The button above already opens BudgetSheet; add a separate link */}
 
         {/* Expense Distribution */}
         {pieChartData.length > 0 && (

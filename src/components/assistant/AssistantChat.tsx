@@ -407,6 +407,9 @@ export function AssistantChat() {
     { label: "📋 Verificar pendências", quickAction: "verificar_pendencias" },
     { label: "📜 Listar regras automáticas", quickAction: "listar_regras" },
     { label: "💡 Sugestões de economia", quickAction: "diagnostico_periodo_total" },
+    { label: "💰 Maiores gastos do mês", quickAction: "maiores_gastos" },
+    { label: "🔍 Gasto fora do padrão", quickAction: "gasto_fora_padrao" },
+    { label: "💳 Quanto falta pro orçamento?", quickAction: "orcamento_restante" },
   ];
 
   const handleQuickAction = async (label: string, quickAction: string) => {

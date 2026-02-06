@@ -157,6 +157,62 @@ export async function applyCategorizationRules(
   return { category: null, accountId: null, ruleId: null };
 }
 
+/**
+ * Suggest rules based on recent "other" (uncategorized) transactions
+ * that appear frequently with similar descriptions.
+ */
+export async function suggestRules(householdId: string): Promise<Array<{
+  pattern: string;
+  suggestedCategory: CategoryType;
+  occurrences: number;
+}>> {
+  if (!householdId) return [];
+
+  // Get recent categorized transactions (not "other") to learn patterns
+  const { data: categorized } = await supabase
+    .from("transactions")
+    .select("description, category")
+    .eq("household_id", householdId)
+    .neq("category", "other")
+    .order("created_at", { ascending: false })
+    .limit(200);
+
+  // Get existing rules to exclude
+  const existingRules = await getCategorizationRules(householdId);
+  const existingPatterns = new Set(existingRules.map((r) => r.pattern.toLowerCase()));
+
+  // Build frequency map of description keywords -> category
+  const keywordCategoryMap = new Map<string, { category: CategoryType; count: number }>();
+
+  for (const tx of categorized || []) {
+    const words = tx.description.toLowerCase().split(/\s+/).filter((w: string) => w.length >= 4);
+    for (const word of words) {
+      if (existingPatterns.has(word)) continue;
+      const entry = keywordCategoryMap.get(word);
+      if (entry) {
+        if (entry.category === tx.category) {
+          entry.count++;
+        }
+      } else {
+        keywordCategoryMap.set(word, { category: tx.category as CategoryType, count: 1 });
+      }
+    }
+  }
+
+  // Filter: only suggest if keyword appeared 3+ times for same category
+  const suggestions = Array.from(keywordCategoryMap.entries())
+    .filter(([_, v]) => v.count >= 3)
+    .sort((a, b) => b[1].count - a[1].count)
+    .slice(0, 10)
+    .map(([pattern, v]) => ({
+      pattern: pattern.toUpperCase(),
+      suggestedCategory: v.category,
+      occurrences: v.count,
+    }));
+
+  return suggestions;
+}
+
 // Create rule from manual correction (learning)
 export async function learnFromCorrection(
   householdId: string,

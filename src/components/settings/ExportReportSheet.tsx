@@ -12,7 +12,7 @@ interface ExportReportSheetProps {
   onClose: () => void;
 }
 
-type ExportFormat = "csv" | "json";
+type ExportFormat = "csv" | "json" | "pdf";
 type DateRange = "1month" | "3months" | "6months" | "12months" | "all";
 
 export function ExportReportSheet({ open, onClose }: ExportReportSheetProps) {
@@ -99,6 +99,50 @@ export function ExportReportSheet({ open, onClose }: ExportReportSheetProps) {
         content = [headers.join(";"), ...rows.map(r => r.join(";"))].join("\n");
         filename = `casacampos_relatorio_${format(new Date(), "yyyy-MM-dd")}.csv`;
         mimeType = "text/csv;charset=utf-8;";
+      } else if (selectedFormat === "pdf") {
+        // Generate PDF via print-ready HTML in new window
+        const totalExpenses = data.filter((t: any) => t.amount < 0).reduce((s: number, t: any) => s + Math.abs(t.amount), 0);
+        const totalIncome = data.filter((t: any) => t.amount > 0).reduce((s: number, t: any) => s + t.amount, 0);
+        const formatBRL = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+        const rows = data.map((t: any) =>
+          `<tr>
+            <td>${format(new Date(t.transaction_date), "dd/MM/yyyy")}</td>
+            <td>${t.description}</td>
+            <td>${t.category}</td>
+            <td style="text-align:right;color:${t.amount < 0 ? '#dc2626' : '#16a34a'}">${formatBRL(t.amount)}</td>
+            <td>${t.payment_method}</td>
+            <td>${t.status === "paid" ? "Pago" : "Pendente"}</td>
+          </tr>`
+        ).join("");
+
+        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Relatório CamposFinance</title>
+        <style>body{font-family:system-ui;padding:20px;color:#333}table{width:100%;border-collapse:collapse;margin-top:16px}
+        th,td{border:1px solid #ddd;padding:6px 10px;font-size:12px;text-align:left}th{background:#f5f5f5}
+        h1{font-size:18px;margin-bottom:4px}h2{font-size:14px;color:#666;margin-top:0}
+        .summary{display:flex;gap:24px;margin:12px 0}.summary div{padding:8px 12px;border:1px solid #ddd;border-radius:8px}</style></head>
+        <body><h1>Relatório Financeiro</h1><h2>${data.length} transações</h2>
+        <div class="summary">
+          <div>Gastos: <strong style="color:#dc2626">${formatBRL(-totalExpenses)}</strong></div>
+          <div>Receitas: <strong style="color:#16a34a">${formatBRL(totalIncome)}</strong></div>
+          <div>Saldo: <strong>${formatBRL(totalIncome - totalExpenses)}</strong></div>
+        </div>
+        <table><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Método</th><th>Status</th></tr></thead>
+        <tbody>${rows}</tbody></table>
+        <script>window.print();</script></body></html>`;
+
+        const w = window.open("", "_blank");
+        if (w) {
+          w.document.write(html);
+          w.document.close();
+        }
+
+        toast({
+          title: "Relatório PDF gerado!",
+          description: `${data.length} transações — use Ctrl+S ou imprimir como PDF.`,
+        });
+        onClose();
+        return;
       } else {
         // Create JSON
         content = JSON.stringify(data, null, 2);
@@ -185,7 +229,7 @@ export function ExportReportSheet({ open, onClose }: ExportReportSheetProps) {
             <label className="text-sm font-medium text-muted-foreground mb-3 block">
               Formato do arquivo
             </label>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <button
                 onClick={() => setSelectedFormat("csv")}
                 className={`p-4 rounded-xl border flex flex-col items-center gap-2 transition-all ${
@@ -195,9 +239,23 @@ export function ExportReportSheet({ open, onClose }: ExportReportSheetProps) {
                 }`}
               >
                 <FileSpreadsheet className="w-8 h-8" />
-                <span className="font-medium">CSV / Excel</span>
+                <span className="font-medium text-sm">CSV</span>
                 <span className={`text-xs ${selectedFormat === "csv" ? "text-primary-foreground/70" : "text-muted-foreground"}`}>
-                  Para planilhas
+                  Planilhas
+                </span>
+              </button>
+              <button
+                onClick={() => setSelectedFormat("pdf")}
+                className={`p-4 rounded-xl border flex flex-col items-center gap-2 transition-all ${
+                  selectedFormat === "pdf"
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-muted/30 border-border hover:border-primary/50"
+                }`}
+              >
+                <FileText className="w-8 h-8" />
+                <span className="font-medium text-sm">PDF</span>
+                <span className={`text-xs ${selectedFormat === "pdf" ? "text-primary-foreground/70" : "text-muted-foreground"}`}>
+                  Relatório
                 </span>
               </button>
               <button
@@ -209,9 +267,9 @@ export function ExportReportSheet({ open, onClose }: ExportReportSheetProps) {
                 }`}
               >
                 <FileText className="w-8 h-8" />
-                <span className="font-medium">JSON</span>
+                <span className="font-medium text-sm">JSON</span>
                 <span className={`text-xs ${selectedFormat === "json" ? "text-primary-foreground/70" : "text-muted-foreground"}`}>
-                  Para desenvolvedores
+                  Dados
                 </span>
               </button>
             </div>
