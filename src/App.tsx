@@ -28,6 +28,8 @@ import AdminHouseholds from "./pages/admin/AdminHouseholds";
 import AdminUsers from "./pages/admin/AdminUsers";
 import AdminCoupons from "./pages/admin/AdminCoupons";
 import AdminAudit from "./pages/admin/AdminAudit";
+import Offline from "./pages/Offline";
+import { PWAUpdatePrompt } from "@/components/pwa/PWAUpdatePrompt";
 import { Loader2 } from "lucide-react";
 import { isNativeApp } from "@/lib/platform";
 import { useEffect } from "react";
@@ -290,6 +292,7 @@ const AppRoutes = () => (
         </AdminRoute>
       }
     />
+    <Route path="/offline" element={<Offline />} />
     <Route path="*" element={<NotFound />} />
   </Routes>
   </AppShell>
@@ -305,6 +308,7 @@ const App = () => (
               <HouseholdProvider>
                 <Toaster />
                 <Sonner />
+                <PWAUpdatePrompt />
                 <AppRoutes />
               </HouseholdProvider>
             </AdminProvider>

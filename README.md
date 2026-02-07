@@ -54,6 +54,29 @@ npm run dev
 npm run test
 ```
 
+## PWA (app instalável e offline)
+
+O app é um PWA: pode ser instalado no celular ou desktop e funciona com cache básico offline.
+
+### Testar PWA localmente
+
+1. Build de produção: `npm run build`
+2. Servir com HTTPS (necessário para Service Worker): `npm run preview` (ou use um túnel como `npx serve dist -s` e ngrok)
+3. No Chrome: DevTools → Application → Manifest (ver manifest e ícones) e Service Workers (ver registro)
+4. Simular offline: Application → Service Workers → Offline
+
+### Validar com Lighthouse
+
+1. Abra o app em produção (ou preview) em uma aba anônima
+2. DevTools → Lighthouse → categoria **Progressive Web App**
+3. Rode a auditoria e confira: instalável, offline, manifest e ícones
+
+### Comportamento
+
+- **Instalação**: Em Configurações aparece "Instalar app" quando o navegador dispara `beforeinstallprompt` (Chrome/Android). No iOS, é mostrada a dica "Adicionar à Tela de Início" (Safari).
+- **Atualização**: Quando houver nova versão, um banner "Atualização disponível" com botão "Recarregar" é exibido (após confirmação o app recarrega com a nova versão).
+- **Offline**: Navegação sem rede mostra a página `/offline` (fallback). Assets do build são cacheados pelo Service Worker.
+
 ## Deploy
 
-Faça deploy do frontend via Vercel/Netlify e das Edge Functions via Supabase CLI.
+Faça deploy do frontend via Vercel/Netlify e das Edge Functions via Supabase CLI. Para PWA, sirva o app via **HTTPS**.

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { ChevronRight, Moon, Bell, Shield, Users, Download, Upload, HelpCircle, LogOut, User, Camera, X, Loader2, Crown, Home, Wallet, RefreshCw, Split, Zap, Target, AlertTriangle, CreditCard } from "lucide-react";
+import { ChevronRight, Moon, Bell, Shield, Users, Download, Upload, HelpCircle, LogOut, User, Camera, X, Loader2, Crown, Home, Wallet, RefreshCw, Split, Zap, Target, AlertTriangle, CreditCard, Smartphone } from "lucide-react";
 import { MobileLayout } from "@/components/layout/MobileLayout";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useHousehold } from "@/hooks/useHousehold";
 import { useAdmin } from "@/hooks/useAdmin";
 import { useProFeature } from "@/hooks/useProFeature";
+import { usePWAInstall } from "@/hooks/usePWAInstall";
 import { useTheme } from "@/components/providers/ThemeProvider";
 import { useNavigate, Link, useSearchParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
@@ -37,6 +38,7 @@ export default function Settings() {
   // Use centralized PRO feature checks
   const csvFeature = useProFeature("CSV_IMPORT");
   const exportFeature = useProFeature("DATA_EXPORT");
+  const { installable, install, installed, isIOS } = usePWAInstall();
   
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [showFamilyMembers, setShowFamilyMembers] = useState(false);
@@ -637,6 +639,63 @@ export default function Settings() {
               </button>
             </div>
           </div>
+
+          {/* Instalar app (PWA) — sempre visível quando o app ainda não está instalado */}
+          {!installed && (
+            <div>
+              <h3 className="text-sm font-medium text-muted-foreground mb-3 px-1">
+                App
+              </h3>
+              <div className="glass-card overflow-hidden">
+                {installable ? (
+                  <button
+                    type="button"
+                    onClick={() => install()}
+                    className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors"
+                  >
+                    <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center">
+                      <Smartphone className="w-5 h-5 text-primary" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-foreground">Instalar app</p>
+                      <p className="text-sm text-muted-foreground truncate">
+                        Instale no celular ou computador
+                      </p>
+                    </div>
+                    <ChevronRight className="w-5 h-5 text-muted-foreground" />
+                  </button>
+                ) : isIOS ? (
+                  <div className="p-4">
+                    <div className="flex items-center gap-4">
+                      <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center shrink-0">
+                        <Smartphone className="w-5 h-5 text-primary" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-foreground">Adicionar à Tela de Início</p>
+                        <p className="text-sm text-muted-foreground">
+                          No Safari: toque em Compartilhar → &quot;Adicionar à Tela de Início&quot;
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-4">
+                    <div className="flex items-center gap-4">
+                      <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center shrink-0">
+                        <Smartphone className="w-5 h-5 text-primary" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-foreground">Instalar app</p>
+                        <p className="text-sm text-muted-foreground">
+                          No Chrome/Edge: menu (⋮) → &quot;Instalar aplicativo&quot; ou &quot;Instalar Campos Finance&quot;
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Admin Panel - Only for Super Admins */}
           {isSuperAdmin && (
