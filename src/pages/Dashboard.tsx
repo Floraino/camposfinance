@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Bell, ChevronRight, TrendingDown, Wallet, Loader2, ScanLine, Plus, Settings, ChevronLeft, Crown } from "lucide-react";
+import { Bell, ChevronRight, TrendingDown, Wallet, Loader2, ScanLine, Plus, Settings, Crown } from "lucide-react";
 import odinLogo from "@/assets/odin-logo.png";
 import { MobileLayout } from "@/components/layout/MobileLayout";
 import { StatCard } from "@/components/ui/StatCard";
@@ -21,9 +21,12 @@ import { Progress } from "@/components/ui/progress";
 import { supabase } from "@/integrations/supabase/client";
 import { ProBadge } from "@/components/paywall/ProBadge";
 import { PendingWidget } from "@/components/pending/PendingWidget";
+import { DateRangePicker, getCurrentMonthRange, type DateRange } from "@/components/ui/DateRangePicker";
+import { useQueryClient } from "@tanstack/react-query";
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { profile, isLoading: authLoading } = useAuth();
   const { currentHousehold, hasSelectedHousehold, isLoading: householdLoading, planType } = useHousehold();
   const { toast } = useToast();
@@ -43,14 +46,11 @@ export default function Dashboard() {
   const [odinInsight, setOdinInsight] = useState<string>("");
   const [isLoadingInsight, setIsLoadingInsight] = useState(false);
   
-  // Month navigation state
-  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
-  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  // Date range state (replaces month/year)
+  const [dateRange, setDateRange] = useState<DateRange>(getCurrentMonthRange);
   
   const [stats, setStats] = useState({
     totalExpenses: 0,
-    totalIncome: 0,
-    balance: 0,
     byCategory: {} as Record<CategoryType, number>,
   });
 
@@ -65,7 +65,7 @@ export default function Dashboard() {
     if (currentHousehold?.id) {
       loadData();
     }
-  }, [selectedMonth, selectedYear, currentHousehold?.id]);
+  }, [dateRange.from, dateRange.to, currentHousehold?.id]);
 
   const loadData = async () => {
     if (!currentHousehold?.id) return;
@@ -74,7 +74,7 @@ export default function Dashboard() {
       setIsLoading(true);
       const [txs, monthStats, evolution, currentBudget] = await Promise.all([
         getTransactions(currentHousehold.id),
-        getMonthlyStats(currentHousehold.id, selectedMonth, selectedYear),
+        getMonthlyStats(currentHousehold.id, dateRange.from, dateRange.to),
         getMonthlyEvolution(currentHousehold.id, 5),
         getCurrentBudget(currentHousehold.id, "monthly"),
       ]);
@@ -193,12 +193,13 @@ export default function Dashboard() {
       
       // Refresh stats and monthly data
       const [monthStats, evolution] = await Promise.all([
-        getMonthlyStats(currentHousehold.id, selectedMonth, selectedYear),
+        getMonthlyStats(currentHousehold.id, dateRange.from, dateRange.to),
         getMonthlyEvolution(currentHousehold.id, 5),
       ]);
       setStats(monthStats);
       setMonthlyData(evolution);
       
+      queryClient.invalidateQueries({ queryKey: ["accounts", currentHousehold.id] });
       toast({
         title: "Gasto adicionado!",
         description: `${newTx.description} foi registrado com sucesso.`,
@@ -223,34 +224,6 @@ export default function Dashboard() {
     setSelectedTransaction(null);
   };
 
-  const navigateMonth = (direction: "prev" | "next") => {
-    if (direction === "prev") {
-      if (selectedMonth === 0) {
-        setSelectedMonth(11);
-        setSelectedYear(selectedYear - 1);
-      } else {
-        setSelectedMonth(selectedMonth - 1);
-      }
-    } else {
-      const now = new Date();
-      // Don't navigate to future months
-      if (selectedYear === now.getFullYear() && selectedMonth >= now.getMonth()) {
-        return;
-      }
-      if (selectedMonth === 11) {
-        setSelectedMonth(0);
-        setSelectedYear(selectedYear + 1);
-      } else {
-        setSelectedMonth(selectedMonth + 1);
-      }
-    }
-  };
-
-  const isCurrentMonth = () => {
-    const now = new Date();
-    return selectedMonth === now.getMonth() && selectedYear === now.getFullYear();
-  };
-
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat("pt-BR", {
       style: "currency",
@@ -258,14 +231,21 @@ export default function Dashboard() {
     }).format(value);
   };
 
-  const monthNames = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", 
-                      "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
-  const monthName = monthNames[selectedMonth];
+  // Derive a friendly period label for display
+  const periodLabel = (() => {
+    const from = new Date(dateRange.from + "T12:00:00");
+    const to = new Date(dateRange.to + "T12:00:00");
+    if (from.getMonth() === to.getMonth() && from.getFullYear() === to.getFullYear()) {
+      const names = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                     "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+      return names[from.getMonth()];
+    }
+    return `${from.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} – ${to.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}`;
+  })();
 
-  // Filter transactions for selected month
+  // Filter transactions for selected date range
   const filteredTransactions = transactions.filter(tx => {
-    const txDate = new Date(tx.transaction_date);
-    return txDate.getMonth() === selectedMonth && txDate.getFullYear() === selectedYear;
+    return tx.transaction_date >= dateRange.from && tx.transaction_date <= dateRange.to;
   });
 
   // Prepare pie chart data
@@ -325,28 +305,12 @@ export default function Dashboard() {
           </button>
         </header>
 
-        {/* Month Navigation */}
-        <div className="glass-card p-3 mb-6 flex items-center justify-between">
-          <button 
-            onClick={() => navigateMonth("prev")}
-            className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center touch-feedback"
-          >
-            <ChevronLeft className="w-5 h-5 text-foreground" />
-          </button>
-          <div className="text-center">
-            <p className="font-semibold text-foreground capitalize">{monthName}</p>
-            <p className="text-xs text-muted-foreground">{selectedYear}</p>
-          </div>
-          <button 
-            onClick={() => navigateMonth("next")}
-            disabled={isCurrentMonth()}
-            className={`w-10 h-10 rounded-xl flex items-center justify-center touch-feedback ${
-              isCurrentMonth() ? "bg-muted/50 opacity-50 cursor-not-allowed" : "bg-muted"
-            }`}
-          >
-            <ChevronRight className="w-5 h-5 text-foreground" />
-          </button>
-        </div>
+        {/* Date Range Picker */}
+        <DateRangePicker
+          value={dateRange}
+          onChange={setDateRange}
+          className="mb-6"
+        />
 
         {/* AI Insight Card */}
         <button 
@@ -418,7 +382,7 @@ export default function Dashboard() {
             value={formatCurrency(stats.totalExpenses)}
             variant="expense"
             icon={TrendingDown}
-            subtitle={`em ${monthName}`}
+            subtitle={`em ${periodLabel}`}
           />
           <StatCard
             title="Saldo Livre"
@@ -477,7 +441,7 @@ export default function Dashboard() {
           <div className="glass-card p-4 mb-6">
             <div className="flex items-center justify-between mb-4">
               <h2 className="font-semibold text-foreground">Gastos por Categoria</h2>
-              <span className="text-xs text-muted-foreground capitalize">{monthName}</span>
+              <span className="text-xs text-muted-foreground capitalize">{periodLabel}</span>
             </div>
             <ExpensePieChart data={pieChartData} />
           </div>
@@ -496,7 +460,7 @@ export default function Dashboard() {
         <div className="mb-6">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-semibold text-foreground">
-              {isCurrentMonth() ? "Últimos Lançamentos" : `Lançamentos de ${monthName}`}
+              {`Lançamentos — ${periodLabel}`}
             </h2>
             <button 
               onClick={() => navigate("/transactions")}
@@ -509,18 +473,14 @@ export default function Dashboard() {
           {uiTransactions.length === 0 ? (
             <div className="glass-card p-8 text-center">
               <p className="text-muted-foreground mb-4">
-                {isCurrentMonth() 
-                  ? "Nenhum gasto registrado ainda" 
-                  : `Nenhum gasto em ${monthName}`}
+                Nenhum gasto neste período
               </p>
-              {isCurrentMonth() && (
-                <button 
-                  onClick={() => setShowAddSheet(true)}
-                  className="text-primary font-medium"
-                >
-                  Adicionar primeiro gasto
-                </button>
-              )}
+              <button 
+                onClick={() => setShowAddSheet(true)}
+                className="text-primary font-medium"
+              >
+                Adicionar primeiro gasto
+              </button>
             </div>
           ) : (
             <div className="space-y-3">

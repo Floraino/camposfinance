@@ -58,11 +58,17 @@ function localCategorize(description: string): CategoryType {
   return "other";
 }
 
-export async function categorizeAllTransactions(): Promise<{ updated: number; errors: string[] }> {
-  // Get all transactions with 'other' category or uncategorized
+export async function categorizeAllTransactions(householdId?: string): Promise<{ updated: number; errors: string[] }> {
+  if (!householdId) {
+    console.warn("[categorizeAll] householdId não fornecido — abortando para evitar data leak");
+    return { updated: 0, errors: ["householdId é obrigatório"] };
+  }
+
+  // Get all transactions with 'other' category or uncategorized — SCOPED to household
   const { data: transactions, error } = await supabase
     .from("transactions")
     .select("id, description, category")
+    .eq("household_id", householdId)
     .eq("category", "other");
 
   if (error) throw error;
@@ -123,11 +129,18 @@ export async function categorizeAllTransactions(): Promise<{ updated: number; er
   return { updated, errors };
 }
 
-export async function recategorizeAllTransactions(): Promise<{ updated: number; errors: string[] }> {
-  // Get ALL transactions
+export async function recategorizeAllTransactions(householdId?: string): Promise<{ updated: number; errors: string[] }> {
+  if (!householdId) {
+    console.warn("[recategorizeAll] householdId não fornecido — abortando para evitar data leak");
+    return { updated: 0, errors: ["householdId é obrigatório"] };
+  }
+
+
+  // Get ALL transactions — SCOPED to household
   const { data: transactions, error } = await supabase
     .from("transactions")
-    .select("id, description, category");
+    .select("id, description, category")
+    .eq("household_id", householdId);
 
   if (error) throw error;
   if (!transactions || transactions.length === 0) {

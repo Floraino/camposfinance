@@ -1,10 +1,13 @@
 import { useState, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { X, Trash2, Loader2, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CategoryBadge, categoryConfig, type CategoryType } from "@/components/ui/CategoryBadge";
 import { cn } from "@/lib/utils";
 import { type Transaction, type NewTransaction, updateTransaction, deleteTransaction } from "@/services/transactionService";
 import { getFamilyMembers, type FamilyMember } from "@/services/familyService";
+import { getHouseholdAccounts, type Account } from "@/services/householdService";
+import { getCreditCards, type CreditCard } from "@/services/creditCardService";
 import { useToast } from "@/hooks/use-toast";
 import {
   AlertDialog,
@@ -33,6 +36,7 @@ const paymentMethods = [
 ] as const;
 
 export function EditTransactionSheet({ isOpen, transaction, onClose, onUpdate, householdId }: EditTransactionSheetProps) {
+  const queryClient = useQueryClient();
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState<CategoryType>("other");
@@ -40,12 +44,17 @@ export function EditTransactionSheet({ isOpen, transaction, onClose, onUpdate, h
   const [status, setStatus] = useState<"paid" | "pending">("paid");
   const [isRecurring, setIsRecurring] = useState(false);
   const [transactionDate, setTransactionDate] = useState("");
+  const [dueDate, setDueDate] = useState("");
   const [memberId, setMemberId] = useState<string | undefined>(undefined);
   const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(undefined);
+  const [selectedCardId, setSelectedCardId] = useState<string | undefined>(undefined);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [cards, setCards] = useState<CreditCard[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  
+
   const { toast } = useToast();
 
   useEffect(() => {
@@ -58,7 +67,11 @@ export function EditTransactionSheet({ isOpen, transaction, onClose, onUpdate, h
       setIsRecurring(transaction.is_recurring);
       setTransactionDate(transaction.transaction_date);
       setMemberId(transaction.member_id || undefined);
+      setSelectedAccountId(transaction.account_id ?? undefined);
+      setSelectedCardId(transaction.credit_card_id ?? undefined);
+      setDueDate(transaction.due_date || "");
       loadFamilyMembers();
+      loadAccountsAndCards();
     }
   }, [isOpen, transaction, householdId]);
 
@@ -69,6 +82,20 @@ export function EditTransactionSheet({ isOpen, transaction, onClose, onUpdate, h
       setFamilyMembers(members);
     } catch (error) {
       console.error("Error loading family members:", error);
+    }
+  };
+
+  const loadAccountsAndCards = async () => {
+    if (!householdId) return;
+    try {
+      const [accs, cardList] = await Promise.all([
+        getHouseholdAccounts(householdId),
+        getCreditCards(householdId),
+      ]);
+      setAccounts(accs);
+      setCards(cardList);
+    } catch (error) {
+      console.error("Error loading accounts/cards:", error);
     }
   };
 
@@ -85,9 +112,15 @@ export function EditTransactionSheet({ isOpen, transaction, onClose, onUpdate, h
         status,
         is_recurring: isRecurring,
         transaction_date: transactionDate,
+        due_date: status === "pending" ? (dueDate || null) : null,
         member_id: memberId,
+        account_id: selectedAccountId ?? null,
+        credit_card_id: paymentMethod === "card" ? (selectedCardId ?? null) : null,
       });
       
+      // Invalidar saldo de contas e dados de cartões após editar transação
+      queryClient.invalidateQueries({ queryKey: ["accounts", householdId] });
+
       toast({
         title: "Gasto atualizado!",
         description: "As alterações foram salvas com sucesso.",
@@ -248,7 +281,10 @@ export function EditTransactionSheet({ isOpen, transaction, onClose, onUpdate, h
                 {paymentMethods.map((method) => (
                   <button
                     key={method.id}
-                    onClick={() => setPaymentMethod(method.id)}
+                    onClick={() => {
+                      setPaymentMethod(method.id);
+                      if (method.id !== "card") setSelectedCardId(undefined);
+                    }}
                     className={cn(
                       "h-12 rounded-xl border-2 text-sm font-medium transition-all duration-200",
                       paymentMethod === method.id
@@ -261,7 +297,79 @@ export function EditTransactionSheet({ isOpen, transaction, onClose, onUpdate, h
                 ))}
               </div>
             </div>
-            
+
+            {/* Account Selection — show current and allow change */}
+            {accounts.length > 0 && (
+              <div>
+                <label className="text-sm font-medium text-muted-foreground mb-3 block">
+                  🏦 Conta / Banco
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => setSelectedAccountId(undefined)}
+                    className={cn(
+                      "h-10 px-4 rounded-xl border-2 text-sm font-medium transition-all duration-200",
+                      !selectedAccountId
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border bg-muted/50 text-muted-foreground"
+                    )}
+                  >
+                    Família
+                  </button>
+                  {accounts.map((acc) => (
+                    <button
+                      key={acc.id}
+                      onClick={() => setSelectedAccountId(acc.id)}
+                      className={cn(
+                        "h-10 px-4 rounded-xl border-2 text-sm font-medium transition-all duration-200",
+                        selectedAccountId === acc.id
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border bg-muted/50 text-muted-foreground"
+                      )}
+                    >
+                      {acc.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Credit Card — show when payment = card and there are cards available */}
+            {paymentMethod === "card" && cards.length > 0 && (
+              <div>
+                <label className="text-sm font-medium text-muted-foreground mb-3 block">
+                  💳 Cartão
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => setSelectedCardId(undefined)}
+                    className={cn(
+                      "h-10 px-4 rounded-xl border-2 text-sm font-medium transition-all duration-200",
+                      !selectedCardId
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border bg-muted/50 text-muted-foreground"
+                    )}
+                  >
+                    Sem cartão
+                  </button>
+                  {cards.map((card) => (
+                    <button
+                      key={card.id}
+                      onClick={() => setSelectedCardId(card.id)}
+                      className={cn(
+                        "h-10 px-4 rounded-xl border-2 text-sm font-medium transition-all duration-200",
+                        selectedCardId === card.id
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border bg-muted/50 text-muted-foreground"
+                      )}
+                    >
+                      {card.name}{card.last_four ? ` •${card.last_four}` : ""}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Status Toggle */}
             <div className="flex gap-3">
               <button
@@ -287,6 +395,21 @@ export function EditTransactionSheet({ isOpen, transaction, onClose, onUpdate, h
                 ⏳ Pendente
               </button>
             </div>
+
+            {/* Due Date — only when status is pending */}
+            {status === "pending" && (
+              <div>
+                <label className="text-sm font-medium text-muted-foreground mb-2 block">
+                  Data de vencimento
+                </label>
+                <input
+                  type="date"
+                  value={dueDate}
+                  onChange={(e) => setDueDate(e.target.value)}
+                  className="w-full h-12 px-4 rounded-xl border-2 border-border bg-background text-foreground text-sm"
+                />
+              </div>
+            )}
 
             {/* Family Member Selection */}
             {familyMembers.length > 0 && (

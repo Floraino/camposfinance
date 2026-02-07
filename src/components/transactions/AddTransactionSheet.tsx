@@ -6,7 +6,10 @@ import { cn } from "@/lib/utils";
 import { type NewTransaction } from "@/services/transactionService";
 import { createInstallmentPurchase } from "@/services/installmentService";
 import { getFamilyMembers, type FamilyMember } from "@/services/familyService";
+import { getHouseholdAccounts, type Account } from "@/services/householdService";
+import { getCreditCards, type CreditCard } from "@/services/creditCardService";
 import { categorizeDescription } from "@/services/categorizationService";
+import { applyCategorizationRules } from "@/services/categorizationRulesService";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useProFeature } from "@/hooks/useProFeature";
@@ -32,7 +35,6 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
   const [category, setCategory] = useState<CategoryType>("other");
   const [paymentMethod, setPaymentMethod] = useState<"pix" | "boleto" | "card" | "cash">("pix");
   const [status, setStatus] = useState<"paid" | "pending">("paid");
-  const [isRecurring, setIsRecurring] = useState(false);
   const [dueDate, setDueDate] = useState<string>("");
   const [isInstallment, setIsInstallment] = useState(false);
   const [installmentCount, setInstallmentCount] = useState("2");
@@ -44,6 +46,10 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
   const [attachedImage, setAttachedImage] = useState<string | null>(null);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [creditCards, setCreditCards] = useState<CreditCard[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(undefined);
+  const [selectedCardId, setSelectedCardId] = useState<string | undefined>(undefined);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -54,11 +60,27 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
   useEffect(() => {
     if (isOpen && householdId) {
       loadFamilyMembers();
+      loadAccountsAndCards();
       setManualCategorySet(false);
     }
   }, [isOpen, householdId]);
 
+  const loadAccountsAndCards = async () => {
+    if (!householdId) return;
+    try {
+      const [accs, cards] = await Promise.all([
+        getHouseholdAccounts(householdId),
+        getCreditCards(householdId),
+      ]);
+      setAccounts(accs);
+      setCreditCards(cards);
+    } catch (error) {
+      console.error("Error loading accounts/cards:", error);
+    }
+  };
+
   // Auto-categorize when description changes
+  // Priority: family rules > local keywords > AI edge function
   useEffect(() => {
     if (manualCategorySet || !description || description.length < 3) {
       return;
@@ -69,10 +91,25 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
       clearTimeout(categorizationTimeoutRef.current);
     }
 
-    // Debounce categorization
+    // Debounce categorization (600ms)
     categorizationTimeoutRef.current = setTimeout(async () => {
       setIsCategorizing(true);
       try {
+        // 1) Try family-specific rules first (highest priority)
+        if (householdId) {
+          const ruleResult = await applyCategorizationRules(householdId, description);
+          if (ruleResult.category && ruleResult.category !== "other") {
+            setCategory(ruleResult.category);
+            // Also pre-select account if the rule defines one
+            if (ruleResult.accountId && accounts.some(a => a.id === ruleResult.accountId)) {
+              setSelectedAccountId(ruleResult.accountId);
+            }
+            console.log("[auto-cat] matched family rule:", ruleResult.ruleId);
+            return; // done — family rule matched
+          }
+        }
+
+        // 2) Fallback: local keywords + AI edge function
         const suggestedCategory = await categorizeDescription(description);
         if (suggestedCategory && suggestedCategory !== "other") {
           setCategory(suggestedCategory);
@@ -82,14 +119,14 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
       } finally {
         setIsCategorizing(false);
       }
-    }, 500);
+    }, 600);
 
     return () => {
       if (categorizationTimeoutRef.current) {
         clearTimeout(categorizationTimeoutRef.current);
       }
     };
-  }, [description, manualCategorySet]);
+  }, [description, manualCategorySet, householdId, accounts]);
 
   const handleCategorySelect = (cat: CategoryType) => {
     setCategory(cat);
@@ -231,6 +268,10 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
 
   const handleSubmit = async () => {
     if (!description || !amount) return;
+    if (paymentMethod === "card" && creditCards.length > 0 && !selectedCardId) {
+      toast({ title: "Selecione um cartão", variant: "destructive" });
+      return;
+    }
 
     const parsedAmount = Math.abs(parseFloat(amount.replace(",", ".")));
 
@@ -261,9 +302,11 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
         category,
         payment_method: paymentMethod,
         status,
-        is_recurring: isRecurring,
+        is_recurring: false,
         member_id: memberId,
         ...(dueDate ? { due_date: dueDate } : {}),
+        account_id: selectedAccountId || null,
+        credit_card_id: paymentMethod === "card" ? (selectedCardId || null) : null,
       });
     }
 
@@ -273,13 +316,14 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
     setCategory("other");
     setPaymentMethod("pix");
     setStatus("paid");
-    setIsRecurring(false);
     setIsInstallment(false);
     setInstallmentCount("2");
     setDueDate("");
     setMemberId(undefined);
     setManualCategorySet(false);
     setAttachedImage(null);
+    setSelectedAccountId(undefined);
+    setSelectedCardId(undefined);
     onClose();
   };
 
@@ -472,6 +516,78 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
             </div>
           </div>
           
+          {/* Account Selection — only when accounts exist */}
+          {accounts.length > 0 && (
+            <div>
+              <label className="text-sm font-medium text-muted-foreground mb-3 block">
+                🏦 Conta / Banco
+              </label>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => setSelectedAccountId(undefined)}
+                  className={cn(
+                    "h-10 px-4 rounded-xl border-2 text-sm font-medium transition-all duration-200",
+                    !selectedAccountId
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border bg-muted/50 text-muted-foreground"
+                  )}
+                >
+                  Geral
+                </button>
+                {accounts.map((acc) => (
+                  <button
+                    key={acc.id}
+                    onClick={() => setSelectedAccountId(acc.id)}
+                    className={cn(
+                      "h-10 px-4 rounded-xl border-2 text-sm font-medium transition-all duration-200",
+                      selectedAccountId === acc.id
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border bg-muted/50 text-muted-foreground"
+                    )}
+                  >
+                    {acc.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Credit Card Selection — only when payment = card AND cards exist */}
+          {paymentMethod === "card" && creditCards.length > 0 && (
+            <div>
+              <label className="text-sm font-medium text-muted-foreground mb-3 block">
+                💳 Cartão
+              </label>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => setSelectedCardId(undefined)}
+                  className={cn(
+                    "h-10 px-4 rounded-xl border-2 text-sm font-medium transition-all duration-200",
+                    !selectedCardId
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border bg-muted/50 text-muted-foreground"
+                  )}
+                >
+                  Sem cartão
+                </button>
+                {creditCards.map((card) => (
+                  <button
+                    key={card.id}
+                    onClick={() => setSelectedCardId(card.id)}
+                    className={cn(
+                      "h-10 px-4 rounded-xl border-2 text-sm font-medium transition-all duration-200",
+                      selectedCardId === card.id
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border bg-muted/50 text-muted-foreground"
+                    )}
+                  >
+                    {card.name}{card.last_four ? ` •${card.last_four}` : ""}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Status Toggle */}
           <div className="flex gap-3">
             <button
@@ -552,27 +668,7 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
             </div>
           )}
           
-          {/* Recurring Toggle */}
-          <button
-            onClick={() => setIsRecurring(!isRecurring)}
-            className={cn(
-              "w-full flex items-center justify-between p-4 rounded-xl border-2 transition-all duration-200",
-              isRecurring
-                ? "border-primary bg-primary/10"
-                : "border-border bg-muted/50"
-            )}
-          >
-            <span className={cn(
-              "font-medium",
-              isRecurring ? "text-primary" : "text-muted-foreground"
-            )}>
-              🔄 Gasto recorrente
-            </span>
-            <ChevronRight className={cn(
-              "w-5 h-5 transition-transform",
-              isRecurring && "rotate-90"
-            )} />
-          </button>
+          {/* Recurring toggle removed from UI — is_recurring defaults to false */}
 
           {/* Installment Toggle */}
           <button

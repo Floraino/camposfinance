@@ -13,14 +13,12 @@ import { EditTransactionSheet } from "@/components/transactions/EditTransactionS
 import type { Transaction } from "@/services/transactionService";
 import {
   Loader2,
-  ChevronLeft,
-  ChevronRight,
-  Calendar,
   TrendingDown,
   TrendingUp,
   Receipt,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { DateRangePicker, getCurrentMonthRange, type DateRange } from "@/components/ui/DateRangePicker";
 
 const PAYMENT_FILTERS = [
   { id: "all", label: "Todos" },
@@ -36,24 +34,6 @@ const STATUS_FILTERS = [
   { id: "pending", label: "Pendentes" },
 ] as const;
 
-function getCurrentMonth(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-}
-
-function formatMonth(monthStr: string): string {
-  const [y, m] = monthStr.split("-").map(Number);
-  const d = new Date(y, m - 1, 1);
-  const label = d.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
-  return label.charAt(0).toUpperCase() + label.slice(1);
-}
-
-function shiftMonth(monthStr: string, delta: number): string {
-  const [y, m] = monthStr.split("-").map(Number);
-  const d = new Date(y, m - 1 + delta, 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
-
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat("pt-BR", {
     style: "currency",
@@ -66,7 +46,7 @@ export default function Timeline() {
   const { currentHousehold, isLoading: householdLoading } = useHousehold();
   const { toast } = useToast();
 
-  const [month, setMonth] = useState(getCurrentMonth);
+  const [dateRange, setDateRange] = useState<DateRange>(getCurrentMonthRange);
   const [paymentFilter, setPaymentFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [result, setResult] = useState<TimelineResult | null>(null);
@@ -77,13 +57,13 @@ export default function Timeline() {
     if (currentHousehold?.id) {
       loadTimeline();
     }
-  }, [currentHousehold?.id, month, paymentFilter, statusFilter]);
+  }, [currentHousehold?.id, dateRange.from, dateRange.to, paymentFilter, statusFilter]);
 
   const loadTimeline = async () => {
     if (!currentHousehold?.id) return;
     setIsLoading(true);
     try {
-      const filters: TimelineFilters = { month };
+      const filters: TimelineFilters = { from: dateRange.from, to: dateRange.to };
       if (paymentFilter !== "all") {
         filters.paymentMethod = paymentFilter as TimelineFilters["paymentMethod"];
       }
@@ -125,41 +105,21 @@ export default function Timeline() {
           </p>
         </header>
 
-        {/* Month Selector */}
-        <div className="flex items-center justify-between glass-card p-3 mb-4">
-          <button
-            onClick={() => setMonth((m) => shiftMonth(m, -1))}
-            className="p-2 rounded-xl hover:bg-muted/60 transition-colors"
-          >
-            <ChevronLeft className="w-5 h-5 text-muted-foreground" />
-          </button>
-          <div className="flex items-center gap-2">
-            <Calendar className="w-4 h-4 text-primary" />
-            <span className="font-semibold text-foreground">{formatMonth(month)}</span>
-          </div>
-          <button
-            onClick={() => setMonth((m) => shiftMonth(m, 1))}
-            className="p-2 rounded-xl hover:bg-muted/60 transition-colors"
-          >
-            <ChevronRight className="w-5 h-5 text-muted-foreground" />
-          </button>
-        </div>
+        {/* Date Range Picker */}
+        <DateRangePicker
+          value={dateRange}
+          onChange={setDateRange}
+          className="mb-4"
+        />
 
         {/* Summary Cards */}
         {result && !isLoading && (
-          <div className="grid grid-cols-3 gap-3 mb-4">
+          <div className="grid grid-cols-2 gap-3 mb-4">
             <div className="glass-card p-3 text-center">
               <TrendingDown className="w-4 h-4 text-destructive mx-auto mb-1" />
               <p className="text-xs text-muted-foreground">Gastos</p>
               <p className="text-sm font-bold text-destructive">
-                {formatCurrency(-result.totalExpense)}
-              </p>
-            </div>
-            <div className="glass-card p-3 text-center">
-              <TrendingUp className="w-4 h-4 text-success mx-auto mb-1" />
-              <p className="text-xs text-muted-foreground">Receitas</p>
-              <p className="text-sm font-bold text-success">
-                {formatCurrency(result.totalIncome)}
+                {formatCurrency(result.totalExpense)}
               </p>
             </div>
             <div className="glass-card p-3 text-center">
@@ -287,6 +247,8 @@ export default function Timeline() {
             transaction_date: editingTx.transaction_date,
             notes: editingTx.notes || "",
             member_id: editingTx.member_id || undefined,
+            account_id: editingTx.account_id ?? null,
+            credit_card_id: editingTx.credit_card_id ?? null,
           }}
           onUpdate={() => {
             setEditingTx(null);

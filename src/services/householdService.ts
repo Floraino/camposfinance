@@ -388,21 +388,55 @@ export async function getHouseholdMembersWithProfiles(
   }));
 }
 
-// Get household accounts
+/**
+ * Returns sum of transaction amounts per account_id for a household.
+ * Used to compute current balance = account.balance + sum(transactions).
+ */
+async function getAccountTransactionSums(householdId: string): Promise<Record<string, number>> {
+  const { data, error } = await supabase
+    .from("transactions")
+    .select("account_id, amount")
+    .eq("household_id", householdId)
+    .not("account_id", "is", null);
+
+  if (error) {
+    console.warn("[getAccountTransactionSums]", error.message);
+    return {};
+  }
+
+  const sums: Record<string, number> = {};
+  for (const row of data || []) {
+    const id = row.account_id as string;
+    if (!id) continue;
+    sums[id] = (sums[id] ?? 0) + Number(row.amount);
+  }
+  return sums;
+}
+
+// Get household accounts with current balance = initial balance + sum(transactions linked to account)
 export async function getHouseholdAccounts(householdId: string): Promise<Account[]> {
   if (!householdId) {
     throw new Error("householdId é obrigatório para listar contas");
   }
 
-  const { data, error } = await supabase
-    .from("accounts")
-    .select("*")
-    .eq("household_id", householdId)
-    .eq("is_active", true)
-    .order("name");
+  const [accountsResult, txSums] = await Promise.all([
+    supabase
+      .from("accounts")
+      .select("*")
+      .eq("household_id", householdId)
+      .eq("is_active", true)
+      .order("name"),
+    getAccountTransactionSums(householdId),
+  ]);
 
-  if (error) throw error;
-  return data as unknown as Account[] || [];
+  if (accountsResult.error) throw accountsResult.error;
+  const accounts = (accountsResult.data as unknown as Account[]) || [];
+
+  return accounts.map((acc) => {
+    const movement = txSums[acc.id] ?? 0;
+    const initialBalance = Number(acc.balance) || 0;
+    return { ...acc, balance: initialBalance + movement };
+  });
 }
 
 // Create account

@@ -34,8 +34,8 @@ export interface ParsedRow {
   status: ParsedRowStatus;
   parsed: {
     description: string;
-    amount: number;
-    type: "INCOME" | "EXPENSE";
+    amount: number; // sempre negativo (despesa)
+    type: "EXPENSE"; // app só controla despesas
     category: CategoryType;
     payment_method: "pix" | "boleto" | "card" | "cash";
     status: "paid" | "pending";
@@ -55,6 +55,12 @@ export interface ImportResult {
   duplicates: number;
   failed: number;
   errors: { row: number; reason: string }[];
+  /** Same as imported; returned by edge for clarity */
+  createdCount?: number;
+  linkedAccountId?: string | null;
+  linkedCardId?: string | null;
+  /** Payment method applied to all imported rows (edge/directImport). */
+  appliedPaymentMethod?: DefaultPaymentMethodType;
 }
 
 // Category mapping for inference
@@ -82,7 +88,6 @@ const categoryMapping: Record<string, CategoryType> = {
   "entertainment": "leisure", "health": "health", "education": "education",
   "shopping": "shopping", "bills": "bills", "leisure": "leisure",
   "outros": "other", "outro": "other", "other": "other",
-  // Income-related
   "salário": "other", "salario": "other", "renda": "other",
   "pix recebido": "other", "transferência recebida": "other",
 };
@@ -228,7 +233,10 @@ function localAnalyzeCSV(csvContent: string): CSVAnalysis {
     } else if (!hasEntradaSaida && /valor|amount|total|pre[cç]o|custo/i.test(h)) {
       columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: "amount", confidence: 0.9 });
       usedIndices.add(i);
-    } else if (/categ|tipo/i.test(h)) {
+    } else if (/natureza|^type$|debit|credit|d[eé]bito|cr[eé]dito|^tipo$|entrada|sa[ií]da/i.test(h) && !columnMappings.find(m => m.internalField === "transaction_type")) {
+      columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: "transaction_type", confidence: 0.85 });
+      usedIndices.add(i);
+    } else if (/categ/i.test(h)) {
       columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: "category", confidence: 0.8 });
       usedIndices.add(i);
     } else if (/pagamento|payment|forma|m[eé]todo/i.test(h)) {
@@ -450,6 +458,65 @@ export function generateImportHash(date: string, amount: number, description: st
   return hash.toString(36);
 }
 
+const INVOICE_OR_CARD_KEYWORDS = [
+  "fatura", "cartão", "cartao", "credito", "crédito", "credit card", "invoice",
+];
+
+/**
+ * Normalize string for case-insensitive matching (NFD, lowercase, trim).
+ */
+function normalizeForMatch(s: string): string {
+  return (s || "")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .trim();
+}
+
+/**
+ * Returns true if the row context (description + cell values) indicates
+ * a credit card / invoice statement line (e.g. fatura, cartão, invoice).
+ */
+export function isInvoiceOrCard(rowContext: string): boolean {
+  const normalized = normalizeForMatch(rowContext);
+  return INVOICE_OR_CARD_KEYWORDS.some((kw) => normalized.includes(normalizeForMatch(kw)));
+}
+
+const EXPLICIT_EXPENSE_VALUES = [
+  "expense", "saída", "saida", "débito", "debito", "debit", "d", "despesa", "gasto", "outgoing",
+];
+
+/**
+ * Parses a cell value mapped as transaction type/nature.
+ * App só controla despesas: retorna EXPENSE ou null.
+ */
+export function parseExplicitTransactionType(cellValue: string): "EXPENSE" | null {
+  const v = normalizeForMatch((cellValue || "").trim());
+  if (!v) return null;
+  if (EXPLICIT_EXPENSE_VALUES.some((x) => v === x || v.startsWith(x + " ") || v.endsWith(" " + x))) return "EXPENSE";
+  return null;
+}
+
+export interface ClassifyTransactionParams {
+  rowContext: string;
+  rawAmount: number;
+  explicitType?: "EXPENSE" | null;
+}
+
+export interface ClassifyTransactionResult {
+  kind: "EXPENSE";
+  amountNormalized: number;
+}
+
+/**
+ * Toda transação importada é despesa. Retorna amount normalizado (positivo) para persistir como negativo.
+ */
+export function classifyTransaction(params: ClassifyTransactionParams): ClassifyTransactionResult {
+  const { rawAmount } = params;
+  const amountNormalized = Math.abs(rawAmount);
+  return { kind: "EXPENSE", amountNormalized };
+}
+
 /**
  * Check if a line is a non-transaction line (header, informational, etc.)
  */
@@ -498,7 +565,7 @@ function isLikelyDate(str: string): boolean {
 
 /**
  * Parse CSV content into rows with the given column mappings
- * Now supports Entrada/Saída columns and proper INCOME/EXPENSE typing
+ * Toda linha importada vira despesa (amount negativo).
  */
 export function parseCSVWithMappings(
   csvContent: string,
@@ -549,6 +616,7 @@ export function parseCSVWithMappings(
     const categoryCol = mappingByField["category"];
     const paymentCol = mappingByField["payment_method"];
     const notesCol = mappingByField["notes"];
+    const transactionTypeCol = mappingByField["transaction_type"];
 
     // Parse description
     let description = descCol ? cells[descCol.csvIndex] || "" : "";
@@ -564,44 +632,38 @@ export function parseCSVWithMappings(
     }
     if (!description) description = "Transação importada";
 
-    // Parse amount and determine type (INCOME/EXPENSE)
+    const rowContext = `${description} ${cells.join(" ")}`.trim();
+
+    // Parse amount: app só controla despesas — toda linha vira despesa com abs(valor)
     let amount: number | null = null;
-    let transactionType: "INCOME" | "EXPENSE" = "EXPENSE";
 
     if (hasEntradaSaidaMappings) {
-      // Handle separate Entrada/Saída columns
       const entradaStr = entradaCol ? cells[entradaCol.csvIndex] || "" : "";
       const saidaStr = saidaCol ? cells[saidaCol.csvIndex] || "" : "";
-      
-      const entradaValue = parseLocalizedNumber(entradaStr);
       const saidaValue = parseLocalizedNumber(saidaStr);
-      
-      if (entradaValue !== null && entradaValue !== 0) {
-        // This is income (entrada)
-        amount = Math.abs(entradaValue);
-        transactionType = "INCOME";
-      } else if (saidaValue !== null && saidaValue !== 0) {
-        // This is expense (saída)
+      const entradaValue = parseLocalizedNumber(entradaStr);
+      if (saidaValue !== null && saidaValue !== 0) {
         amount = Math.abs(saidaValue);
-        transactionType = "EXPENSE";
+      } else if (entradaValue !== null && entradaValue !== 0) {
+        // Linha só com entrada: ignorar (não importamos receitas)
+        results.push({
+          rowIndex: i + 1,
+          raw: line,
+          status: "SKIPPED",
+          parsed: null,
+          errors: [],
+          reason: "Entrada ignorada — app controla apenas despesas",
+        });
+        continue;
       } else {
-        // Both are empty or zero
-        errors.push("Entrada e Saída vazias");
+        errors.push("Valor não encontrado (use coluna Saída para despesas)");
       }
     } else {
-      // Single amount column
       const amountStr = amountCol ? cells[amountCol.csvIndex] : "";
-      amount = parseLocalizedNumber(amountStr);
-      
-      if (amount !== null) {
-        // Determine type by sign
-        if (amount > 0) {
-          transactionType = "INCOME";
-          amount = Math.abs(amount);
-        } else {
-          transactionType = "EXPENSE";
-          amount = Math.abs(amount);
-        }
+      const rawAmount = parseLocalizedNumber(amountStr);
+      if (rawAmount !== null) {
+        const classified = classifyTransaction({ rowContext, rawAmount });
+        amount = classified.amountNormalized;
       } else if (amountStr) {
         errors.push(`Valor inválido: "${amountStr}"`);
       } else {
@@ -643,16 +705,7 @@ export function parseCSVWithMappings(
     const hasDateError = !transaction_date && (errors.some(e => e.includes("Data inválida")) || requiresDateConfirmation);
     const hasAmountError = amount === null || amount === 0;
     
-    if (errors.includes("Entrada e Saída vazias")) {
-      results.push({
-        rowIndex: i + 1,
-        raw: line,
-        status: "SKIPPED",
-        parsed: null,
-        errors: [],
-        reason: "Entrada e Saída vazias",
-      });
-    } else if (hasDateError && !hasAmountError) {
+    if (hasDateError && !hasAmountError) {
       // Has amount but no valid date - mark as error, not OK with fallback
       results.push({
         rowIndex: i + 1,
@@ -664,8 +717,7 @@ export function parseCSVWithMappings(
         requiresDateConfirmation,
       } as ParsedRow);
     } else if (!hasAmountError && transaction_date) {
-      // Valid amount AND valid date - OK
-      const finalAmount = transactionType === "EXPENSE" ? -Math.abs(amount) : Math.abs(amount);
+      const finalAmount = -Math.abs(amount);
 
       results.push({
         rowIndex: i + 1,
@@ -674,7 +726,7 @@ export function parseCSVWithMappings(
         parsed: {
           description: description.substring(0, 255),
           amount: finalAmount,
-          type: transactionType,
+          type: "EXPENSE",
           category,
           payment_method,
           status: "paid",
@@ -700,14 +752,29 @@ export function parseCSVWithMappings(
   return results;
 }
 
+export type DefaultPaymentMethodType = "pix" | "card" | "boleto" | "cash";
+
+export interface ImportTransactionsOptions {
+  /** Optional account (bank) to link all imported transactions to. */
+  accountId?: string | null;
+  /** Optional credit card to link all imported transactions to (when CSV is card statement). */
+  creditCardId?: string | null;
+  /** Payment method applied to all imported rows (default: pix). */
+  defaultPaymentMethod?: DefaultPaymentMethodType | null;
+  /** Original filename for audit (inferred institution). */
+  originalFilename?: string | null;
+}
+
 /**
  * Import transactions via edge function.
  * Falls back to direct Supabase insert if edge function is unavailable.
+ * When options.accountId or options.creditCardId are set, all imported rows are linked to that account/card.
  */
 export async function importTransactions(
   householdId: string,
   transactions: ParsedRow[],
-  skipDuplicates = true
+  skipDuplicates = true,
+  options?: ImportTransactionsOptions
 ): Promise<ImportResult> {
   const validTransactions = transactions
     .filter(t => t.parsed !== null && t.status === "OK")
@@ -722,15 +789,28 @@ export async function importTransactions(
     };
   }
 
-  // Try edge function first
+  // Try edge function first — always send defaultAccountId/defaultCardId/defaultPaymentMethod so backend applies to all rows
   try {
+    const defaultAccountId = options?.accountId ?? null;
+    const defaultCardId = options?.creditCardId ?? null;
+    const defaultPaymentMethod = options?.defaultPaymentMethod ?? "pix";
+    const body: Record<string, unknown> = {
+      householdId,
+      transactions: validTransactions,
+      skipDuplicates,
+      defaultAccountId,
+      defaultCardId,
+      defaultPaymentMethod,
+      originalFilename: options?.originalFilename ?? null,
+    };
+
     const { data, error } = await supabase.functions.invoke("import-csv", {
-      body: { householdId, transactions: validTransactions, skipDuplicates },
+      body,
     });
 
     if (error) {
       console.warn("[CSV Import] Edge function indisponível, usando importação direta:", error.message);
-      return await directImport(householdId, validTransactions, skipDuplicates);
+      return await directImport(householdId, validTransactions, skipDuplicates, options);
     }
 
     if (data?.error) {
@@ -748,7 +828,7 @@ export async function importTransactions(
       throw err;
     }
     console.warn("[CSV Import] Trying direct import fallback:", err);
-    return await directImport(householdId, validTransactions, skipDuplicates);
+    return await directImport(householdId, validTransactions, skipDuplicates, options);
   }
 }
 
@@ -759,7 +839,8 @@ export async function importTransactions(
 async function directImport(
   householdId: string,
   transactions: Array<ParsedRow["parsed"]>,
-  skipDuplicates: boolean
+  skipDuplicates: boolean,
+  options?: ImportTransactionsOptions
 ): Promise<ImportResult> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Usuário não autenticado");
@@ -783,6 +864,9 @@ async function directImport(
 
   const toInsert: any[] = [];
   const now = new Date().toISOString();
+  const accountId = options?.accountId ?? null;
+  const defaultPaymentMethod = options?.defaultPaymentMethod ?? "pix";
+  const creditCardId = defaultPaymentMethod === "card" ? (options?.creditCardId ?? null) : null;
 
   for (let i = 0; i < transactions.length; i++) {
     const tx = transactions[i];
@@ -799,11 +883,13 @@ async function directImport(
       description: tx.description.substring(0, 255),
       amount: tx.amount,
       category: tx.category || "other",
-      payment_method: tx.payment_method || "pix",
+      payment_method: defaultPaymentMethod,
       status: tx.status || "paid",
       transaction_date: tx.transaction_date,
       notes: tx.notes ? tx.notes.substring(0, 500) : null,
       is_recurring: false,
+      account_id: accountId,
+      credit_card_id: creditCardId,
       created_at: now,
       updated_at: now,
     });
@@ -833,7 +919,6 @@ async function directImport(
 export const CSV_TEMPLATE_HEADER = "data,descricao,tipo,valor,categoria,forma_pagamento,conta";
 
 export const CSV_TEMPLATE_EXAMPLES = [
-  "2026-01-15,Salário mensal,INCOME,5000.00,other,pix,Conta Corrente",
   "2026-01-16,Supermercado Pão de Açúcar,EXPENSE,350.50,food,card,Conta Corrente",
   "2026-01-17,Uber - corrida trabalho,EXPENSE,25.90,transport,pix,Conta Corrente",
 ];
@@ -849,8 +934,8 @@ export function generateCSVTemplate(): string {
     "# CAMPOS:",
     "#   data: formato YYYY-MM-DD (ex: 2026-01-15) ou DD/MM/YYYY",
     "#   descricao: texto descritivo da transação",
-    "#   tipo: INCOME (receita) ou EXPENSE (despesa)",
-    "#   valor: número positivo (ex: 150.50 ou 1500.00)",
+    "#   tipo: EXPENSE (app controla apenas despesas)",
+    "#   valor: valor da despesa (ex: 150.50)",
     "#   categoria: food, transport, bills, leisure, health, education, shopping, other",
     "#   forma_pagamento: pix, card, boleto, cash",
     "#   conta: nome da conta (opcional)",
@@ -939,10 +1024,7 @@ export function parseStandardCSV(csvContent: string): ParsedRow[] {
       continue;
     }
     
-    // Parse type
-    const transactionType = typeStr?.toUpperCase() === "INCOME" ? "INCOME" : "EXPENSE";
-    
-    // Parse amount
+    // Parse amount — app só controla despesas
     const amount = parseLocalizedNumber(valorStr);
     if (amount === null || amount === 0) {
       results.push({
@@ -956,17 +1038,15 @@ export function parseStandardCSV(csvContent: string): ParsedRow[] {
       continue;
     }
     
-    // Category mapping
     const category: CategoryType = categoryMapping[categoryStr?.toLowerCase() || ""] || 
                                    inferCategory(description) || 
                                    "other";
     
-    // Payment method
     const payment_method = paymentMapping[paymentStr?.toLowerCase() || ""] || 
                           inferPaymentMethod(description) || 
                           "pix";
     
-    const finalAmount = transactionType === "EXPENSE" ? -Math.abs(amount) : Math.abs(amount);
+    const finalAmount = -Math.abs(amount);
     
     results.push({
       rowIndex: i + 1,
@@ -975,7 +1055,7 @@ export function parseStandardCSV(csvContent: string): ParsedRow[] {
       parsed: {
         description: description.substring(0, 255) || "Transação importada",
         amount: finalAmount,
-        type: transactionType,
+        type: "EXPENSE",
         category,
         payment_method,
         status: "paid",
@@ -992,7 +1072,7 @@ export function parseStandardCSV(csvContent: string): ParsedRow[] {
 export interface ConvertedTransaction {
   data: string;
   descricao: string;
-  tipo: "INCOME" | "EXPENSE";
+  tipo: "EXPENSE";
   valor: number;
   categoria: string;
   forma_pagamento: string;
@@ -1009,7 +1089,6 @@ export interface ConversionResult {
     ok: number;
     skipped: number;
     errors: number;
-    totalIncome: number;
     totalExpense: number;
   };
 }
@@ -1073,8 +1152,7 @@ export async function convertBankStatement(csvContent: string): Promise<Conversi
   });
   
   const ok = converted.filter(c => c.status === "OK");
-  const totalIncome = ok.filter(c => c.tipo === "INCOME").reduce((sum, c) => sum + c.valor, 0);
-  const totalExpense = ok.filter(c => c.tipo === "EXPENSE").reduce((sum, c) => sum + c.valor, 0);
+  const totalExpense = ok.reduce((sum, c) => sum + c.valor, 0);
   
   return {
     converted,
@@ -1083,7 +1161,6 @@ export async function convertBankStatement(csvContent: string): Promise<Conversi
       ok: ok.length,
       skipped: converted.filter(c => c.status === "SKIPPED").length,
       errors: converted.filter(c => c.status === "ERROR").length,
-      totalIncome,
       totalExpense,
     },
   };

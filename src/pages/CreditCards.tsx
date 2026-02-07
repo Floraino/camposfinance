@@ -7,15 +7,19 @@ import {
   createCreditCard,
   deleteCreditCard,
   getCardStatement,
+  getCardStatementTransactions,
   type CreditCard,
   type NewCreditCard,
   type CardStatement,
 } from "@/services/creditCardService";
+import { type Transaction } from "@/services/transactionService";
+import type { CategoryType } from "@/components/ui/CategoryBadge";
 import {
   getInstallmentGroups,
   cancelInstallment,
   type InstallmentGroup,
 } from "@/services/installmentService";
+import { EditTransactionSheet } from "@/components/transactions/EditTransactionSheet";
 import {
   Loader2,
   Plus,
@@ -55,11 +59,14 @@ export default function CreditCards() {
 
   const [cards, setCards] = useState<CreditCard[]>([]);
   const [statements, setStatements] = useState<Record<string, CardStatement>>({});
+  const [cardTransactions, setCardTransactions] = useState<Record<string, Transaction[]>>({});
   const [installments, setInstallments] = useState<InstallmentGroup[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
   const [deleteCardId, setDeleteCardId] = useState<string | null>(null);
   const [cancelGroupId, setCancelGroupId] = useState<string | null>(null);
+  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
+  const [showEditSheet, setShowEditSheet] = useState(false);
 
   // Add form state
   const [formName, setFormName] = useState("");
@@ -74,6 +81,15 @@ export default function CreditCards() {
     if (currentHousehold?.id) loadData();
   }, [currentHousehold?.id]);
 
+  // Refetch ao voltar para a aba (ex.: usuário adicionou gasto de cartão em Gastos)
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && currentHousehold?.id) loadData();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [currentHousehold?.id]);
+
   const loadData = async () => {
     if (!currentHousehold?.id) return;
     setIsLoading(true);
@@ -85,17 +101,27 @@ export default function CreditCards() {
       setCards(cardsData);
       setInstallments(installmentsData);
 
-      // Load current month statements for each card
+      // Mesma fonte que Gastos: tabela transactions, filtrada por credit_card_id e ciclo da fatura
       const month = getCurrentMonth();
       const stmts: Record<string, CardStatement> = {};
+      const txByCard: Record<string, Transaction[]> = {};
       for (const card of cardsData) {
         try {
           stmts[card.id] = await getCardStatement(currentHousehold.id, card.id, card, month);
-        } catch {
-          // skip
+          const raw = await getCardStatementTransactions(currentHousehold.id, card.id, card, month);
+          txByCard[card.id] = (raw || []).map((t: any) => ({
+            ...t,
+            category: t.category as CategoryType,
+            payment_method: t.payment_method as "pix" | "boleto" | "card" | "cash",
+            status: t.status as "paid" | "pending",
+            member_name: (t.family_members as { name: string } | null)?.name,
+          })) as Transaction[];
+        } catch (_e) {
+          txByCard[card.id] = [];
         }
       }
       setStatements(stmts);
+      setCardTransactions(txByCard);
     } catch (err) {
       console.error("[creditCards] load error:", err);
       toast({ title: "Erro ao carregar cartões", variant: "destructive" });
@@ -343,6 +369,36 @@ export default function CreditCards() {
                       </span>
                     </div>
                   )}
+                  {/* Lista de lançamentos (mesmos registros que em Gastos, filtrados por cartão/fatura) */}
+                  <div className="mt-3">
+                    <p className="text-xs font-medium text-muted-foreground mb-2">Lançamentos na fatura</p>
+                    {(cardTransactions[card.id]?.length ?? 0) > 0 ? (
+                      <ul className="space-y-2 max-h-48 overflow-y-auto">
+                        {(cardTransactions[card.id] || []).map((tx) => (
+                          <li key={tx.id}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedTransaction(tx);
+                                setShowEditSheet(true);
+                              }}
+                              className="w-full flex items-center justify-between text-sm py-1.5 border-b border-border/50 last:border-0 text-left hover:bg-muted/50 rounded px-1 -mx-1"
+                            >
+                              <span className="truncate flex-1 text-foreground">{tx.description}</span>
+                              <span className="text-destructive font-medium shrink-0 ml-2">
+                                {formatCurrency(Math.abs(tx.amount))}
+                              </span>
+                              <span className="text-xs text-muted-foreground shrink-0 ml-2">
+                                {tx.transaction_date ? new Date(tx.transaction_date + "T12:00:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }) : ""}
+                              </span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-sm text-muted-foreground py-2">Nenhum lançamento na fatura atual.</p>
+                    )}
+                  </div>
                 </CardContent>
               </Card>
             );
@@ -401,6 +457,20 @@ export default function CreditCards() {
           </>
         )}
       </div>
+
+      {/* Editar gasto (mesmo fluxo da aba Gastos) */}
+      {currentHousehold?.id && (
+        <EditTransactionSheet
+          isOpen={showEditSheet}
+          transaction={selectedTransaction}
+          onClose={() => {
+            setShowEditSheet(false);
+            setSelectedTransaction(null);
+          }}
+          onUpdate={() => loadData()}
+          householdId={currentHousehold.id}
+        />
+      )}
 
       {/* Delete Card Dialog */}
       <AlertDialog open={!!deleteCardId} onOpenChange={() => setDeleteCardId(null)}>

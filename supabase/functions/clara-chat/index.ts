@@ -316,9 +316,9 @@ async function getCategoryBudgetProgress(supabase: any, householdId: string) {
 async function analyzeSpendingTrends(supabase: any, householdId: string) {
   const now = new Date();
   const results: any = {
-    currentMonth: { expenses: 0, income: 0 },
-    lastMonth: { expenses: 0, income: 0 },
-    twoMonthsAgo: { expenses: 0, income: 0 },
+    currentMonth: { expenses: 0 },
+    lastMonth: { expenses: 0 },
+    twoMonthsAgo: { expenses: 0 },
     byCategory: {},
     recurringSubscriptions: [],
     insights: [],
@@ -363,8 +363,6 @@ async function analyzeSpendingTrends(supabase: any, householdId: string) {
         results.byCategory[cat] = { currentMonth: 0, lastMonth: 0, twoMonthsAgo: 0 };
       }
       results.byCategory[cat][period] += Math.abs(amount);
-    } else {
-      results[period].income += amount;
     }
   });
 
@@ -428,19 +426,6 @@ async function analyzeSpendingTrends(supabase: any, householdId: string) {
     const [topCat, topData] = topCategories[0] as [string, any];
     if (topData.currentMonth > results.currentMonth.expenses * 0.4) {
       insights.push(`💡 **${categoryLabels[topCat] || topCat}** representa ${((topData.currentMonth / results.currentMonth.expenses) * 100).toFixed(0)}% dos seus gastos. Considere definir uma meta para esta categoria.`);
-    }
-  }
-
-  // Income vs expenses
-  const balance = results.currentMonth.income - results.currentMonth.expenses;
-  if (balance < 0) {
-    insights.push(`🚨 **Atenção:** Gastos superam receitas em R$ ${Math.abs(balance).toFixed(2)} este mês.`);
-  } else if (results.currentMonth.income > 0) {
-    const savingsRate = (balance / results.currentMonth.income) * 100;
-    if (savingsRate >= 20) {
-      insights.push(`🎉 **Excelente!** Você está economizando ${savingsRate.toFixed(0)}% da sua renda.`);
-    } else if (savingsRate >= 10) {
-      insights.push(`👍 Você está economizando ${savingsRate.toFixed(0)}% da sua renda. A meta ideal é 20%.`);
     }
   }
 
@@ -608,12 +593,12 @@ const aiTools = [
     type: "function",
     function: {
       name: "add_transaction",
-      description: "Adicionar um novo lançamento financeiro. NEGATIVO para gastos, POSITIVO para receitas.",
+      description: "Adicionar um novo gasto (despesa). Valor sempre negativo.",
       parameters: {
         type: "object",
         properties: {
           description: { type: "string", description: "Descrição do lançamento" },
-          amount: { type: "number", description: "Valor em reais. NEGATIVO para gastos, POSITIVO para receitas" },
+          amount: { type: "number", description: "Valor em reais (sempre negativo para despesa)" },
           category: { type: "string", enum: ["food", "transport", "entertainment", "health", "education", "shopping", "bills", "other"] },
           payment_method: { type: "string", enum: ["pix", "boleto", "card", "cash"] },
           status: { type: "string", enum: ["paid", "pending"] },
@@ -1051,7 +1036,6 @@ serve(async (req) => {
     const lastMonthTransactions = lastMonthTxs || [];
 
     const totalExpenses = transactions.filter((t: any) => t.amount < 0).reduce((sum: number, t: any) => sum + Math.abs(t.amount), 0);
-    const totalIncome = transactions.filter((t: any) => t.amount > 0).reduce((sum: number, t: any) => sum + t.amount, 0);
     const lastMonthExpenses = lastMonthTransactions.filter((t: any) => t.amount < 0).reduce((sum: number, t: any) => sum + Math.abs(t.amount), 0);
 
     const byCategory: Record<string, number> = {};
@@ -1099,8 +1083,6 @@ Se pedirem, recuse educadamente.
 
 💰 DADOS FINANCEIROS DE ${currentMonthName.toUpperCase()}:
 - Gastos: R$ ${totalExpenses.toFixed(2)}
-- Receitas: R$ ${totalIncome.toFixed(2)}
-- Saldo: R$ ${(totalIncome - totalExpenses).toFixed(2)}
 - Transações: ${transactions.length}
 ${lastMonthExpenses > 0 ? `- Variação: ${((totalExpenses - lastMonthExpenses) / lastMonthExpenses * 100).toFixed(1)}% vs mês anterior` : ""}
 

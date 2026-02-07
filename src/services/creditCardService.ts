@@ -37,6 +37,44 @@ export interface CardStatement {
 }
 
 /**
+ * Retorna a chave da fatura (YYYY-MM) à qual uma transação pertence.
+ * Regra: se dia da compra > closingDay, a transação cai na fatura do mês seguinte.
+ * transactionDate é YYYY-MM-DD (data da compra); uso consistente evita divergência com a aba Cartões.
+ */
+export function getInvoiceKey(transactionDate: string, closingDay: number): string {
+  const parts = transactionDate.split("-").map(Number);
+  if (parts.length < 3) return transactionDate.slice(0, 7);
+  let year = parts[0];
+  let month = parts[1];
+  const day = parts[2];
+  if (day > closingDay) {
+    month += 1;
+    if (month > 12) {
+      month = 1;
+      year += 1;
+    }
+  }
+  return `${year}-${String(month).padStart(2, "0")}`;
+}
+
+/**
+ * Retorna o intervalo (startDate, endDate] do ciclo de fatura para um mês YYYY-MM.
+ * Usado em getCardStatement e getCardStatementTransactions para manter uma única regra.
+ */
+export function getStatementDateRange(
+  card: { closing_day: number },
+  month: string
+): { startDate: string; endDate: string } {
+  const [year, m] = month.split("-").map(Number);
+  const prevMonth = m === 1 ? 12 : m - 1;
+  const prevYear = m === 1 ? year - 1 : year;
+  const closing = card.closing_day;
+  const startDate = `${prevYear}-${String(prevMonth).padStart(2, "0")}-${String(closing).padStart(2, "0")}`;
+  const endDate = `${year}-${String(m).padStart(2, "0")}-${String(closing).padStart(2, "0")}`;
+  return { startDate, endDate };
+}
+
+/**
  * Get all credit cards for a household.
  */
 export async function getCreditCards(householdId: string): Promise<CreditCard[]> {
@@ -120,6 +158,7 @@ export async function deleteCreditCard(id: string, householdId: string): Promise
 /**
  * Get the statement summary for a card in a given month.
  * A "statement" is computed: transactions with credit_card_id in the billing cycle.
+ * Usa getStatementDateRange para mesma regra de ciclo em todo o app.
  */
 export async function getCardStatement(
   householdId: string,
@@ -127,13 +166,8 @@ export async function getCardStatement(
   card: CreditCard,
   month: string // YYYY-MM
 ): Promise<CardStatement> {
+  const { startDate, endDate } = getStatementDateRange(card, month);
   const [year, m] = month.split("-").map(Number);
-
-  // Billing cycle: from closing_day of previous month to closing_day of this month
-  const prevMonth = m === 1 ? 12 : m - 1;
-  const prevYear = m === 1 ? year - 1 : year;
-  const startDate = `${prevYear}-${String(prevMonth).padStart(2, "0")}-${String(card.closing_day).padStart(2, "0")}`;
-  const endDate = `${year}-${String(m).padStart(2, "0")}-${String(card.closing_day).padStart(2, "0")}`;
 
   const { data, error } = await supabase
     .from("transactions")
@@ -175,6 +209,7 @@ export async function getCardStatement(
 
 /**
  * Get transactions for a specific card statement (billing cycle).
+ * Mesma tabela e regra de ciclo que Gastos; apenas filtro por credit_card_id e período.
  */
 export async function getCardStatementTransactions(
   householdId: string,
@@ -182,15 +217,14 @@ export async function getCardStatementTransactions(
   card: CreditCard,
   month: string
 ): Promise<any[]> {
-  const [year, m] = month.split("-").map(Number);
-  const prevMonth = m === 1 ? 12 : m - 1;
-  const prevYear = m === 1 ? year - 1 : year;
-  const startDate = `${prevYear}-${String(prevMonth).padStart(2, "0")}-${String(card.closing_day).padStart(2, "0")}`;
-  const endDate = `${year}-${String(m).padStart(2, "0")}-${String(card.closing_day).padStart(2, "0")}`;
+  const { startDate, endDate } = getStatementDateRange(card, month);
 
   const { data, error } = await supabase
     .from("transactions")
-    .select("*")
+    .select(`
+      *,
+      family_members ( name )
+    `)
     .eq("household_id", householdId)
     .eq("credit_card_id", cardId)
     .gt("transaction_date", startDate)

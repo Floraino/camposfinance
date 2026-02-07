@@ -15,6 +15,8 @@ interface TransactionToImport {
   transaction_date: string;
   notes?: string;
   import_hash?: string;
+  account_id?: string | null;
+  credit_card_id?: string | null;
 }
 
 interface ImportResult {
@@ -65,9 +67,28 @@ serve(async (req) => {
       );
     }
 
-    const { householdId, transactions, skipDuplicates = true } = await req.json();
+    const body = await req.json();
+    const {
+      householdId,
+      transactions,
+      skipDuplicates = true,
+      defaultAccountId: bodyDefaultAccountId = null,
+      defaultCardId: bodyDefaultCardId = null,
+      defaultPaymentMethod: bodyDefaultPaymentMethod = null,
+      accountId = null,
+      creditCardId = null,
+      originalFilename = null,
+    } = body;
 
-    console.log(`[import-csv][${traceId}] User: ${user.id}`);
+    const defaultAccountId = bodyDefaultAccountId ?? accountId ?? null;
+    const defaultPaymentMethod = (bodyDefaultPaymentMethod && ["pix", "card", "boleto", "cash"].includes(bodyDefaultPaymentMethod))
+      ? bodyDefaultPaymentMethod
+      : "pix";
+    const defaultCardId = defaultPaymentMethod === "card"
+      ? (bodyDefaultCardId ?? creditCardId ?? null)
+      : null;
+
+    console.log(`[import-csv][${traceId}] CSV_IMPORT_STARTED User: ${user.id}, filename: ${originalFilename ?? "(none)"}, defaultAccountId: ${defaultAccountId ?? "null"}, defaultCardId: ${defaultCardId ?? "null"}, defaultPaymentMethod: ${defaultPaymentMethod}`);
 
     if (!householdId) {
       return new Response(
@@ -107,6 +128,38 @@ serve(async (req) => {
         JSON.stringify({ error: "Você não é membro desta família" }),
         { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
+    }
+
+    // Validate defaultAccountId belongs to household
+    if (defaultAccountId) {
+      const { data: accountRow, error: accountErr } = await supabase
+        .from("accounts")
+        .select("id")
+        .eq("id", defaultAccountId)
+        .eq("household_id", householdId)
+        .single();
+      if (accountErr || !accountRow) {
+        return new Response(
+          JSON.stringify({ error: "Conta selecionada não pertence a esta família", code: "INVALID_ACCOUNT" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
+    // Validate defaultCardId belongs to household
+    if (defaultCardId) {
+      const { data: cardRow, error: cardErr } = await supabase
+        .from("credit_cards")
+        .select("id")
+        .eq("id", defaultCardId)
+        .eq("household_id", householdId)
+        .single();
+      if (cardErr || !cardRow) {
+        return new Response(
+          JSON.stringify({ error: "Cartão selecionado não pertence a esta família", code: "INVALID_CARD" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
     }
 
     // Check PRO plan for CSV import (gracefully handle missing table/migration)
@@ -198,18 +251,23 @@ serve(async (req) => {
         continue;
       }
 
-      // Prepare transaction for insert
+      const rowAccountId = tx.account_id ?? defaultAccountId ?? null;
+      const rowCardId = defaultPaymentMethod === "card" ? (tx.credit_card_id ?? defaultCardId ?? null) : null;
+      const paymentMethod = defaultPaymentMethod;
+
       toInsert.push({
         user_id: user.id,
         household_id: householdId,
         description: tx.description.substring(0, 255),
         amount: tx.amount,
         category: tx.category || "other",
-        payment_method: tx.payment_method || "pix",
+        payment_method: paymentMethod,
         status: tx.status || "paid",
         transaction_date: tx.transaction_date,
         notes: tx.notes ? tx.notes.substring(0, 500) : null,
         is_recurring: false,
+        account_id: rowAccountId,
+        credit_card_id: rowCardId,
         created_at: now,
         updated_at: now,
       });
@@ -250,6 +308,9 @@ serve(async (req) => {
           imported: result.imported,
           duplicates: result.duplicates,
           failed: result.failed,
+          originalFilename: originalFilename ?? undefined,
+          accountId: defaultAccountId ?? undefined,
+          creditCardId: defaultCardId ?? undefined,
         },
       });
     } catch (auditError) {
@@ -257,10 +318,18 @@ serve(async (req) => {
       console.warn(`[import-csv][${traceId}] Audit log failed (non-blocking):`, auditError);
     }
 
-    console.log(`[import-csv][${traceId}] Done: imported=${result.imported}, duplicates=${result.duplicates}, failed=${result.failed}`);
+    console.log(`[import-csv][${traceId}] CSV_IMPORT_COMPLETED imported=${result.imported}, duplicates=${result.duplicates}, failed=${result.failed}`);
+
+    const responsePayload = {
+      ...result,
+      createdCount: result.imported,
+      linkedAccountId: defaultAccountId ?? null,
+      linkedCardId: defaultCardId ?? null,
+      appliedPaymentMethod: defaultPaymentMethod,
+    };
 
     return new Response(
-      JSON.stringify(result),
+      JSON.stringify(responsePayload),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {

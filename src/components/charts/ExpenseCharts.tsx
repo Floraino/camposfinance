@@ -79,7 +79,6 @@ export function ExpensePieChart({ data, className }: ExpensePieChartProps) {
 
 interface MonthlyData {
   month: string;
-  income: number;
   expenses: number;
 }
 

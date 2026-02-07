@@ -113,6 +113,15 @@ serve(async (req) => {
     const traceId = crypto.randomUUID().slice(0, 8);
     console.log(`[analyze-csv][${traceId}] Request received`);
 
+    // Auth check — require valid session token
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) {
+      return new Response(
+        JSON.stringify({ error: "Não autorizado", code: "UNAUTHORIZED" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     const { csvContent, sampleSize = 50 } = await req.json();
 
     if (!csvContent || typeof csvContent !== "string") {

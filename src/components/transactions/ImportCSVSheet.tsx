@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from "react";
 import { X, Upload, FileSpreadsheet, Loader2, CheckCircle, AlertCircle, ChevronRight, Download, RefreshCw, MinusCircle, ArrowUpCircle, ArrowDownCircle, Wand2, FileDown, FileCheck } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { useHousehold } from "@/hooks/useHousehold";
@@ -27,7 +28,15 @@ import {
   type ImportResult,
   type ConvertedTransaction,
   type ConversionResult,
+  type ImportTransactionsOptions,
 } from "@/services/csvImportService";
+import {
+  inferInstitutionFromFilename,
+  matchInstitutionToHousehold,
+  type InstitutionMatchResult,
+} from "@/services/inferInstitutionFromFilename";
+import { getHouseholdAccounts, type Account } from "@/services/householdService";
+import { getCreditCards, type CreditCard } from "@/services/creditCardService";
 
 interface ImportCSVSheetProps {
   isOpen: boolean;
@@ -37,11 +46,11 @@ interface ImportCSVSheetProps {
 
 type ImportStep = "upload" | "mapping" | "preview" | "importing" | "result" | "convert-preview";
 type ImportMode = "standard" | "convert";
+type DefaultPaymentMethod = "pix" | "card" | "boleto" | "cash";
 
 const INTERNAL_FIELDS = [
   { value: "description", label: "Descrição" },
   { value: "amount", label: "Valor" },
-  { value: "entrada", label: "Entrada (Receita)" },
   { value: "saida", label: "Saída (Despesa)" },
   { value: "date", label: "Data" },
   { value: "category", label: "Categoria" },
@@ -51,6 +60,7 @@ const INTERNAL_FIELDS = [
 ];
 
 export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVSheetProps) {
+  const queryClient = useQueryClient();
   const { currentHousehold } = useHousehold();
   const { allowed: isPro } = useProFeature("CSV_IMPORT");
   const { toast } = useToast();
@@ -75,6 +85,15 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
   const [importProgress, setImportProgress] = useState(0);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
 
+  // Filename-based account/card inference
+  const [originalFilename, setOriginalFilename] = useState<string | null>(null);
+  const [inferredMatch, setInferredMatch] = useState<InstitutionMatchResult | null>(null);
+  const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(undefined);
+  const [selectedCardId, setSelectedCardId] = useState<string | undefined>(undefined);
+  const [defaultPaymentMethod, setDefaultPaymentMethod] = useState<DefaultPaymentMethod>("pix");
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [cards, setCards] = useState<CreditCard[]>([]);
+
   const resetState = useCallback(() => {
     setStep("upload");
     setMode("standard");
@@ -85,6 +104,13 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
     setConversionResult(null);
     setImportResult(null);
     setImportProgress(0);
+    setOriginalFilename(null);
+    setInferredMatch(null);
+    setSelectedAccountId(undefined);
+    setSelectedCardId(undefined);
+    setDefaultPaymentMethod("pix");
+    setAccounts([]);
+    setCards([]);
   }, []);
 
   const handleClose = useCallback(() => {
@@ -124,6 +150,47 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
     try {
       const content = await file.text();
       setCsvContent(content);
+      setOriginalFilename(file.name);
+
+      // Infer account/card from filename and match to household (non-blocking)
+      if (currentHousehold?.id) {
+        (async () => {
+          try {
+            const inferred = inferInstitutionFromFilename(file.name);
+            const [accs, cardList] = await Promise.all([
+              getHouseholdAccounts(currentHousehold.id),
+              getCreditCards(currentHousehold.id),
+            ]);
+            setAccounts(accs);
+            setCards(cardList);
+            const match = matchInstitutionToHousehold(inferred, accs, cardList);
+            setInferredMatch(match);
+            if (inferred?.kind === "card") {
+              setDefaultPaymentMethod("card");
+            } else {
+              setDefaultPaymentMethod("pix");
+            }
+            if (match.confidence === "high") {
+              if (match.accountId) setSelectedAccountId(match.accountId);
+              if (match.cardId) setSelectedCardId(match.cardId);
+            } else {
+              setSelectedAccountId(undefined);
+              setSelectedCardId(undefined);
+            }
+            if (inferred && (match.matchedName || match.confidence !== "none")) {
+              console.log("[CSV Import] CSV_IMPORT_INFERRED_INSTITUTION", {
+                filename: file.name,
+                inferredName: inferred.name,
+                kind: inferred.kind,
+                matchedId: match.accountId ?? match.cardId,
+                confidence: match.confidence,
+              });
+            }
+          } catch (e) {
+            console.warn("[CSV Import] Infer institution failed:", e);
+          }
+        })();
+      }
 
       if (importMode === "convert") {
         // Convert bank statement mode
@@ -275,10 +342,27 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
         setImportProgress(prev => Math.min(prev + 10, 90));
       }, 200);
 
+      const accountId =
+        selectedAccountId ??
+        (inferredMatch?.confidence === "high" && inferredMatch?.accountId
+          ? inferredMatch.accountId
+          : undefined);
+      const creditCardId =
+        defaultPaymentMethod === "card"
+          ? (selectedCardId ?? (inferredMatch?.confidence === "high" && inferredMatch?.cardId ? inferredMatch.cardId : undefined))
+          : null;
+      const importOptions: ImportTransactionsOptions = {
+        originalFilename: originalFilename ?? undefined,
+        accountId: accountId ?? null,
+        creditCardId: creditCardId ?? null,
+        defaultPaymentMethod,
+      };
+
       const result = await importTransactions(
         currentHousehold.id,
         parsedRows,
-        skipDuplicates
+        skipDuplicates,
+        importOptions
       );
 
       clearInterval(progressInterval);
@@ -287,9 +371,18 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
       setStep("result");
 
       if (result.imported > 0) {
+        if (currentHousehold?.id) {
+          queryClient.invalidateQueries({ queryKey: ["accounts", currentHousehold.id] });
+        }
+        const linkedMsg =
+          accountId && accounts.find((a) => a.id === accountId)
+            ? ` Vinculadas à conta ${accounts.find((a) => a.id === accountId)?.name}.`
+            : creditCardId && cards.find((c) => c.id === creditCardId)
+              ? ` Vinculadas ao cartão ${cards.find((c) => c.id === creditCardId)?.name}.`
+              : "";
         toast({
           title: "Importação concluída!",
-          description: `${result.imported} transações importadas com sucesso.`,
+          description: `${result.imported} transações importadas com sucesso.${linkedMsg}`,
         });
         onImportComplete?.();
       }
@@ -322,8 +415,7 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
   const validCount = parsedRows.filter(r => r.status === "OK").length;
   const skippedCount = parsedRows.filter(r => r.status === "SKIPPED").length;
   const errorCount = parsedRows.filter(r => r.status === "ERROR").length;
-  const incomeCount = parsedRows.filter(r => r.parsed?.type === "INCOME").length;
-  const expenseCount = parsedRows.filter(r => r.parsed?.type === "EXPENSE").length;
+  const expenseCount = parsedRows.filter(r => r.status === "OK").length;
 
   // Get available columns from CSV
   const csvHeaders = analysis?.sampleRows[0]?._raw?.split(analysis.separator).map((h, i) => ({
@@ -509,15 +601,7 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                   </div>
                 </div>
 
-                {/* Income/Expense Summary */}
                 <div className="flex items-center justify-center gap-6 text-sm">
-                  <div className="flex items-center gap-2 text-success">
-                    <ArrowUpCircle className="w-5 h-5" />
-                    <span className="font-medium">
-                      R$ {conversionResult.summary.totalIncome.toFixed(2)}
-                    </span>
-                    <span className="text-muted-foreground">receitas</span>
-                  </div>
                   <div className="flex items-center gap-2 text-destructive">
                     <ArrowDownCircle className="w-5 h-5" />
                     <span className="font-medium">
@@ -556,8 +640,8 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                             <TableRow key={idx}>
                               <TableCell className="text-xs">{tx.data}</TableCell>
                               <TableCell className="text-sm truncate max-w-[120px]">{tx.descricao}</TableCell>
-                              <TableCell className={`text-right text-sm font-medium ${tx.tipo === "INCOME" ? "text-success" : "text-destructive"}`}>
-                                {tx.tipo === "INCOME" ? "+" : "-"}R$ {tx.valor.toFixed(2)}
+                              <TableCell className="text-right text-sm font-medium text-destructive">
+                                -R$ {tx.valor.toFixed(2)}
                               </TableCell>
                             </TableRow>
                           ))}
@@ -743,13 +827,8 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                   </div>
                 </div>
 
-                {/* Income/Expense breakdown */}
                 {validCount > 0 && (
                   <div className="flex items-center gap-4 text-sm">
-                    <div className="flex items-center gap-1 text-success">
-                      <ArrowUpCircle className="w-4 h-4" />
-                      <span>{incomeCount} receitas</span>
-                    </div>
                     <div className="flex items-center gap-1 text-destructive">
                       <ArrowDownCircle className="w-4 h-4" />
                       <span>{expenseCount} despesas</span>
@@ -767,6 +846,90 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                     Ignorar transações duplicadas
                   </label>
                 </div>
+
+                {/* Método de lançamento (aplicado a todas as linhas importadas) */}
+                <div className="glass-card p-4 space-y-3">
+                  <h3 className="text-sm font-semibold text-foreground">Método de lançamento</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Forma de pagamento aplicada a todas as transações deste import.
+                  </p>
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">Forma de pagamento</label>
+                    <Select
+                      value={defaultPaymentMethod}
+                      onValueChange={(v) => {
+                        const method = v as DefaultPaymentMethod;
+                        setDefaultPaymentMethod(method);
+                        if (method !== "card") setSelectedCardId(undefined);
+                      }}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="pix">Pix</SelectItem>
+                        <SelectItem value="card">Cartão</SelectItem>
+                        <SelectItem value="boleto">Boleto</SelectItem>
+                        <SelectItem value="cash">Dinheiro</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                {/* Inferred account/card from filename */}
+                {(inferredMatch?.matchedName || accounts.length > 0 || cards.length > 0) && (
+                  <div className="glass-card p-4 space-y-3">
+                    <h3 className="text-sm font-semibold text-foreground">Vincular a conta/cartão</h3>
+                    {inferredMatch?.confidence === "high" && inferredMatch.matchedName && (
+                      <p className="text-xs text-muted-foreground">
+                        Detectado pelo arquivo: <span className="font-medium text-foreground">{inferredMatch.matchedName}</span>
+                      </p>
+                    )}
+                    {inferredMatch?.confidence === "low" && inferredMatch.matchedName && (
+                      <p className="text-xs text-amber-600 dark:text-amber-500">
+                        Várias opções possíveis: {inferredMatch.matchedName}. Escolha abaixo se quiser.
+                      </p>
+                    )}
+                    {accounts.length > 0 && (
+                      <div>
+                        <label className="text-xs text-muted-foreground mb-1 block">Conta / Banco</label>
+                        <Select
+                          value={selectedAccountId ?? "_none_"}
+                          onValueChange={(v) => setSelectedAccountId(v === "_none_" ? undefined : v)}
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="Família (nenhuma)" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="_none_">Família (nenhuma)</SelectItem>
+                            {accounts.map((a) => (
+                              <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                    {defaultPaymentMethod === "card" && cards.length > 0 && (
+                      <div>
+                        <label className="text-xs text-muted-foreground mb-1 block">Cartão (opcional)</label>
+                        <Select
+                          value={selectedCardId ?? "_none_"}
+                          onValueChange={(v) => setSelectedCardId(v === "_none_" ? undefined : v)}
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="Nenhum cartão" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="_none_">Nenhum cartão</SelectItem>
+                            {cards.map((c) => (
+                              <SelectItem key={c.id} value={c.id}>{c.name}{c.last_four ? ` •${c.last_four}` : ""}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Tabs for OK / SKIPPED / ERROR */}
                 <Tabs defaultValue="ok" className="w-full">
@@ -810,19 +973,13 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                               <TableCell className="text-sm truncate max-w-[100px]">
                                 {row.parsed?.description}
                               </TableCell>
-                              <TableCell className={`text-right text-sm font-medium ${row.parsed?.type === "INCOME" ? "text-success" : "text-destructive"}`}>
-                                {row.parsed?.type === "INCOME" ? "+" : "-"}R$ {Math.abs(row.parsed?.amount || 0).toFixed(2)}
+                              <TableCell className="text-right text-sm font-medium text-destructive">
+                                -R$ {Math.abs(row.parsed?.amount || 0).toFixed(2)}
                               </TableCell>
                               <TableCell>
-                                {row.parsed?.type === "INCOME" ? (
-                                  <Badge variant="outline" className="text-xs bg-success/10 text-success border-success/30">
-                                    Receita
-                                  </Badge>
-                                ) : (
-                                  <Badge variant="outline" className="text-xs bg-destructive/10 text-destructive border-destructive/30">
-                                    Despesa
-                                  </Badge>
-                                )}
+                                <Badge variant="outline" className="text-xs bg-destructive/10 text-destructive border-destructive/30">
+                                  Despesa
+                                </Badge>
                               </TableCell>
                             </TableRow>
                           ))}

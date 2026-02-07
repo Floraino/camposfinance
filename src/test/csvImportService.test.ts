@@ -8,6 +8,9 @@ import {
   parseCSVWithMappings,
   isStandardFormat,
   parseStandardCSV,
+  isInvoiceOrCard,
+  parseExplicitTransactionType,
+  classifyTransaction,
   type ColumnMapping,
 } from "@/services/csvImportService";
 
@@ -155,21 +158,21 @@ describe("isStandardFormat", () => {
 // 7) parseStandardCSV
 // =============================================
 describe("parseStandardCSV", () => {
-  it("parses a valid standard CSV", () => {
+  it("parses a valid standard CSV (all as expense)", () => {
     const csv = [
       "data,descricao,tipo,valor,categoria,forma_pagamento,conta",
       "2026-01-15,Supermercado,EXPENSE,350.50,food,card,Conta Corrente",
-      "2026-01-16,Salário,INCOME,5000.00,other,pix,Conta Corrente",
+      "2026-01-16,Outro,EXPENSE,100.00,other,pix,Conta Corrente",
     ].join("\n");
 
     const rows = parseStandardCSV(csv);
     expect(rows).toHaveLength(2);
     expect(rows[0].status).toBe("OK");
     expect(rows[0].parsed?.description).toBe("Supermercado");
-    expect(rows[0].parsed?.amount).toBe(-350.50); // EXPENSE → negative
+    expect(rows[0].parsed?.amount).toBe(-350.50);
     expect(rows[0].parsed?.type).toBe("EXPENSE");
-    expect(rows[1].parsed?.amount).toBe(5000.00);
-    expect(rows[1].parsed?.type).toBe("INCOME");
+    expect(rows[1].parsed?.amount).toBe(-100);
+    expect(rows[1].parsed?.type).toBe("EXPENSE");
   });
 
   it("marks rows with invalid dates as ERROR", () => {
@@ -185,10 +188,81 @@ describe("parseStandardCSV", () => {
 });
 
 // =============================================
-// 8) parseCSVWithMappings (Entrada/Saída)
+// 8) isInvoiceOrCard + classifyTransaction (fatura/cartão vs sinal)
+// =============================================
+describe("isInvoiceOrCard", () => {
+  it("returns true for context containing fatura", () => {
+    expect(isInvoiceOrCard("Compra Supermercado Fatura Nubank")).toBe(true);
+    expect(isInvoiceOrCard("FATURA")).toBe(true);
+  });
+
+  it("returns true for context containing cartão/credit card/invoice", () => {
+    expect(isInvoiceOrCard("Cartão de Crédito")).toBe(true);
+    expect(isInvoiceOrCard("Credit Card Statement")).toBe(true);
+    expect(isInvoiceOrCard("Invoice 123")).toBe(true);
+  });
+
+  it("returns false for normal bank description", () => {
+    expect(isInvoiceOrCard("PIX recebido João")).toBe(false);
+    expect(isInvoiceOrCard("Transferência Conta Corrente")).toBe(false);
+  });
+});
+
+describe("classifyTransaction", () => {
+  it("always returns EXPENSE with amountNormalized = abs(rawAmount)", () => {
+    expect(classifyTransaction({ rowContext: "Fatura", rawAmount: 100 })).toEqual({ kind: "EXPENSE", amountNormalized: 100 });
+    expect(classifyTransaction({ rowContext: "Fatura", rawAmount: -100 })).toEqual({ kind: "EXPENSE", amountNormalized: 100 });
+    expect(classifyTransaction({ rowContext: "PIX", rawAmount: 50 })).toEqual({ kind: "EXPENSE", amountNormalized: 50 });
+    expect(classifyTransaction({ rowContext: "Supermercado", rawAmount: -50 })).toEqual({ kind: "EXPENSE", amountNormalized: 50 });
+  });
+
+  it("explicitType EXPENSE is applied", () => {
+    const r = classifyTransaction({
+      rowContext: "Any",
+      rawAmount: 100,
+      explicitType: "EXPENSE",
+    });
+    expect(r.kind).toBe("EXPENSE");
+    expect(r.amountNormalized).toBe(100);
+  });
+});
+
+// =============================================
+// 9) parseCSVWithMappings (single amount + fatura context)
+// =============================================
+describe("parseCSVWithMappings with single amount and fatura context", () => {
+  it("imports all rows as expense with abs(amount)", () => {
+    const csv = [
+      "Data;Descrição;Valor;Categoria",
+      "10/01/2026;Supermercado Fatura Nubank;150,00;Alimentação",
+      "11/01/2026;Outro;-50,00;Outros",
+    ].join("\n");
+
+    const mappings: ColumnMapping[] = [
+      { csvColumn: "Data", csvIndex: 0, internalField: "date", confidence: 0.95 },
+      { csvColumn: "Descrição", csvIndex: 1, internalField: "description", confidence: 0.95 },
+      { csvColumn: "Valor", csvIndex: 2, internalField: "amount", confidence: 0.95 },
+      { csvColumn: "Categoria", csvIndex: 3, internalField: "category", confidence: 0.8 },
+    ];
+
+    const rows = parseCSVWithMappings(csv, mappings, ";", true, "dd/MM/yyyy", false);
+    expect(rows).toHaveLength(2);
+
+    expect(rows[0].status).toBe("OK");
+    expect(rows[0].parsed?.type).toBe("EXPENSE");
+    expect(rows[0].parsed?.amount).toBe(-150);
+
+    expect(rows[1].status).toBe("OK");
+    expect(rows[1].parsed?.type).toBe("EXPENSE");
+    expect(rows[1].parsed?.amount).toBe(-50);
+  });
+});
+
+// =============================================
+// 10) parseCSVWithMappings (Entrada/Saída)
 // =============================================
 describe("parseCSVWithMappings with Entrada/Saída", () => {
-  it("parses Brazilian bank statement with separate columns", () => {
+  it("uses only saida for amount; rows with only entrada are skipped", () => {
     const csv = [
       "Data;Histórico;Entrada (R$);Saída (R$);Saldo",
       "05/01/2026;Salário;5.000,00;;10.000,00",
@@ -205,15 +279,12 @@ describe("parseCSVWithMappings with Entrada/Saída", () => {
     const rows = parseCSVWithMappings(csv, mappings, ";", true, "dd/MM/yyyy", true);
     expect(rows).toHaveLength(2);
 
-    // First row: income (entrada)
-    expect(rows[0].status).toBe("OK");
-    expect(rows[0].parsed?.type).toBe("INCOME");
-    expect(rows[0].parsed?.amount).toBe(5000.00); // positive for income
-    expect(rows[0].parsed?.description).toBe("Salário");
+    expect(rows[0].status).toBe("SKIPPED");
+    expect(rows[0].reason).toContain("Entrada ignorada");
 
-    // Second row: expense (saída)
     expect(rows[1].status).toBe("OK");
     expect(rows[1].parsed?.type).toBe("EXPENSE");
-    expect(rows[1].parsed?.amount).toBe(-350.50); // negative for expense
+    expect(rows[1].parsed?.amount).toBe(-350.50);
+    expect(rows[1].parsed?.description).toBe("Supermercado");
   });
 });

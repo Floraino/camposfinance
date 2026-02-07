@@ -102,7 +102,6 @@ export function ExportReportSheet({ open, onClose }: ExportReportSheetProps) {
       } else if (selectedFormat === "pdf") {
         // Generate PDF via print-ready HTML in new window
         const totalExpenses = data.filter((t: any) => t.amount < 0).reduce((s: number, t: any) => s + Math.abs(t.amount), 0);
-        const totalIncome = data.filter((t: any) => t.amount > 0).reduce((s: number, t: any) => s + t.amount, 0);
         const formatBRL = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
         const rows = data.map((t: any) =>
@@ -123,9 +122,7 @@ export function ExportReportSheet({ open, onClose }: ExportReportSheetProps) {
         .summary{display:flex;gap:24px;margin:12px 0}.summary div{padding:8px 12px;border:1px solid #ddd;border-radius:8px}</style></head>
         <body><h1>Relatório Financeiro</h1><h2>${data.length} transações</h2>
         <div class="summary">
-          <div>Gastos: <strong style="color:#dc2626">${formatBRL(-totalExpenses)}</strong></div>
-          <div>Receitas: <strong style="color:#16a34a">${formatBRL(totalIncome)}</strong></div>
-          <div>Saldo: <strong>${formatBRL(totalIncome - totalExpenses)}</strong></div>
+          <div>Total de gastos: <strong style="color:#dc2626">${formatBRL(totalExpenses)}</strong></div>
         </div>
         <table><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Método</th><th>Status</th></tr></thead>
         <tbody>${rows}</tbody></table>

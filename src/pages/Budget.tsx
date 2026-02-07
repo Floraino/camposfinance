@@ -67,10 +67,6 @@ export default function BudgetPage() {
     .filter((tx) => tx.amount < 0)
     .reduce((sum, tx) => sum + Math.abs(tx.amount), 0);
 
-  const totalIncome = currentMonthTxs
-    .filter((tx) => tx.amount > 0)
-    .reduce((sum, tx) => sum + tx.amount, 0);
-
   const budgetAmount = budget?.amount || 0;
   const budgetPct = budgetAmount > 0 ? Math.round((totalExpense / budgetAmount) * 100) : 0;
   const remaining = budgetAmount - totalExpense;
@@ -171,19 +167,12 @@ export default function BudgetPage() {
         )}
 
         {/* Summary Cards */}
-        <div className="grid grid-cols-2 gap-3 mb-6">
+        <div className="grid grid-cols-1 gap-3 mb-6">
           <Card className="border">
             <CardContent className="pt-3 pb-3 text-center">
               <TrendingDown className="w-4 h-4 text-destructive mx-auto mb-1" />
-              <p className="text-xs text-muted-foreground">Gastos</p>
-              <p className="text-lg font-bold text-destructive">{formatCurrency(-totalExpense)}</p>
-            </CardContent>
-          </Card>
-          <Card className="border">
-            <CardContent className="pt-3 pb-3 text-center">
-              <TrendingUp className="w-4 h-4 text-success mx-auto mb-1" />
-              <p className="text-xs text-muted-foreground">Receitas</p>
-              <p className="text-lg font-bold text-success">{formatCurrency(totalIncome)}</p>
+              <p className="text-xs text-muted-foreground">Gastos do mês</p>
+              <p className="text-lg font-bold text-destructive">{formatCurrency(totalExpense)}</p>
             </CardContent>
           </Card>
         </div>

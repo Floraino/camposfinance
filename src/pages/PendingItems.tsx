@@ -85,7 +85,7 @@ export default function PendingItems() {
     setIsProcessing(true);
     setProcessingAction("categorize_all");
     try {
-      const result = await recategorizeAllTransactions();
+      const result = await recategorizeAllTransactions(currentHousehold?.id);
       toast({
         title: "Categorização concluída",
         description: `${result.updated} transação(ões) atualizada(s)`,

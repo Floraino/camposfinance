@@ -13,6 +13,7 @@ export interface Transaction {
   is_recurring: boolean;
   transaction_date: string;
   due_date?: string | null; // v2: vencimento para boletos/contas
+  account_id?: string | null; // v5: conta/banco
   credit_card_id?: string | null; // v3: cartão de crédito
   installment_group_id?: string | null; // v4: parcelamento
   installment_number?: number | null; // v4: nº da parcela (1, 2, 3...)
@@ -34,6 +35,8 @@ export interface NewTransaction {
   due_date?: string | null; // v2: vencimento para boletos/contas
   notes?: string;
   member_id?: string;
+  account_id?: string | null; // v5: conta/banco
+  credit_card_id?: string | null; // v3: cartão de crédito
 }
 
 // CRITICAL: All queries MUST filter by householdId for data isolation
@@ -85,8 +88,11 @@ export async function addTransaction(householdId: string, transaction: NewTransa
       status: transaction.status,
       is_recurring: transaction.is_recurring,
       transaction_date: transaction.transaction_date || new Date().toISOString().split("T")[0],
+      due_date: transaction.due_date || null,
       notes: transaction.notes,
       member_id: transaction.member_id,
+      account_id: transaction.account_id || null,
+      credit_card_id: transaction.credit_card_id || null,
     })
     .select(`
       *,
@@ -165,17 +171,31 @@ export async function deleteTransactionsBulk(ids: string[], householdId: string)
   return data?.length ?? 0;
 }
 
-export async function getMonthlyStats(householdId: string, month?: number, year?: number) {
+export async function getMonthlyStats(
+  householdId: string,
+  monthOrFrom?: number | string,
+  yearOrTo?: number | string,
+) {
   if (!householdId) {
     throw new Error("householdId é obrigatório para estatísticas");
   }
 
-  const now = new Date();
-  const targetMonth = month ?? now.getMonth();
-  const targetYear = year ?? now.getFullYear();
+  let startDate: string;
+  let endDate: string;
 
-  const startDate = new Date(targetYear, targetMonth, 1).toISOString().split("T")[0];
-  const endDate = new Date(targetYear, targetMonth + 1, 0).toISOString().split("T")[0];
+  // Detect if called with date range strings (from/to) or legacy month/year numbers
+  if (typeof monthOrFrom === "string" && typeof yearOrTo === "string") {
+    // New: date range mode → from/to as YYYY-MM-DD
+    startDate = monthOrFrom;
+    endDate = yearOrTo;
+  } else {
+    // Legacy: month (0-11) / year mode
+    const now = new Date();
+    const targetMonth = (typeof monthOrFrom === "number" ? monthOrFrom : now.getMonth());
+    const targetYear = (typeof yearOrTo === "number" ? yearOrTo : now.getFullYear());
+    startDate = new Date(targetYear, targetMonth, 1).toISOString().split("T")[0];
+    endDate = new Date(targetYear, targetMonth + 1, 0).toISOString().split("T")[0];
+  }
 
   const { data, error } = await supabase
     .from("transactions")
@@ -188,13 +208,10 @@ export async function getMonthlyStats(householdId: string, month?: number, year?
 
   const transactions = data || [];
   
+  // App controla apenas despesas: amount armazenado negativo; consideramos apenas valores negativos
   const totalExpenses = transactions
     .filter(t => t.amount < 0)
     .reduce((sum, t) => sum + Math.abs(t.amount), 0);
-
-  const totalIncome = transactions
-    .filter(t => t.amount > 0)
-    .reduce((sum, t) => sum + t.amount, 0);
 
   const byCategory = transactions
     .filter(t => t.amount < 0)
@@ -206,8 +223,6 @@ export async function getMonthlyStats(householdId: string, month?: number, year?
 
   return {
     totalExpenses,
-    totalIncome,
-    balance: totalIncome - totalExpenses,
     byCategory,
     transactionCount: transactions.length,
   };
@@ -215,7 +230,6 @@ export async function getMonthlyStats(householdId: string, month?: number, year?
 
 export interface MonthlyExpense {
   month: string;
-  income: number;
   expenses: number;
 }
 
@@ -259,13 +273,8 @@ export async function getMonthlyEvolution(householdId: string, months: number = 
       .filter(t => t.amount < 0)
       .reduce((sum, t) => sum + Math.abs(t.amount), 0);
 
-    const income = monthTransactions
-      .filter(t => t.amount > 0)
-      .reduce((sum, t) => sum + t.amount, 0);
-
     result.push({
       month: monthNames[targetDate.getMonth()],
-      income,
       expenses,
     });
   }
