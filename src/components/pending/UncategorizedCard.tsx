@@ -24,6 +24,8 @@ import {
 import type { Transaction } from "@/services/transactionService";
 import { createCategorizationRule } from "@/services/categorizationRulesService";
 import { updateTransaction } from "@/services/transactionService";
+import { merchantFingerprint } from "@/services/categorizationEngine";
+import { setCache } from "@/services/merchantCategoryCacheService";
 import { useToast } from "@/hooks/use-toast";
 import { useHousehold } from "@/hooks/useHousehold";
 
@@ -35,6 +37,7 @@ interface UncategorizedCardProps {
   onRefresh: () => void;
   householdId: string;
   isProcessing: boolean;
+  progressMessage?: string | null;
 }
 
 export function UncategorizedCard({
@@ -45,6 +48,7 @@ export function UncategorizedCard({
   onRefresh,
   householdId,
   isProcessing,
+  progressMessage,
 }: UncategorizedCardProps) {
   const { toast } = useToast();
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
@@ -56,6 +60,10 @@ export function UncategorizedCard({
   const handleQuickCategorize = async (tx: Transaction, category: CategoryType) => {
     try {
       await updateTransaction(tx.id, householdId, { category });
+      try {
+        const fp = merchantFingerprint(tx.description);
+        if (fp) await setCache(householdId, fp, category, 1.0);
+      } catch (_) { /* cache opcional */ }
       toast({
         title: "Categorizado!",
         description: `${tx.description} → ${categoryConfig[category].label}`,
@@ -211,7 +219,7 @@ export function UncategorizedCard({
               ) : (
                 <Sparkles className="w-4 h-4" />
               )}
-              Categorizar com IA
+              {progressMessage || "Categorizar com IA"}
             </Button>
             <Button
               size="sm"

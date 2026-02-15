@@ -13,7 +13,7 @@ import {
   type PendingItemType,
 } from "@/services/pendingItemsService";
 import { updateTransaction } from "@/services/transactionService";
-import { recategorizeAllTransactions } from "@/services/categorizationService";
+import { categorizeTransactionsService } from "@/services/categorizeTransactionsService";
 import { Button } from "@/components/ui/button";
 import { 
   Loader2, 
@@ -50,6 +50,7 @@ export default function PendingItems() {
   const [processingAction, setProcessingAction] = useState<string | undefined>();
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [selectedDuplicates, setSelectedDuplicates] = useState<string[]>([]);
+  const [categorizeProgress, setCategorizeProgress] = useState<string | null>(null);
 
   useEffect(() => {
     if (currentHousehold?.id) {
@@ -82,18 +83,61 @@ export default function PendingItems() {
   };
 
   const handleCategorizeAll = async () => {
+    if (!currentHousehold?.id) {
+      toast({ title: "Selecione uma família", variant: "destructive" });
+      return;
+    }
     setIsProcessing(true);
     setProcessingAction("categorize_all");
+    setCategorizeProgress("Aplicando cache e regras…");
     try {
-      const result = await recategorizeAllTransactions(currentHousehold?.id);
-      toast({
-        title: "Categorização concluída",
-        description: `${result.updated} transação(ões) atualizada(s)`,
+      const result = await categorizeTransactionsService({
+        familyId: currentHousehold.id,
+        useAI: true,
       });
+      setCategorizeProgress(null);
+      const parts: string[] = [];
+      if (result.appliedByCache > 0) parts.push(`${result.appliedByCache} por cache`);
+      if (result.appliedByRules > 0) parts.push(`${result.appliedByRules} por regras`);
+      if (result.appliedByAI > 0) parts.push(`${result.appliedByAI} por IA`);
+      const hasAiFailure = result.errors.length > 0 && result.sentToAI > 0;
+      if (result.sentToAI > 0 && result.appliedByAI < result.sentToAI) {
+        parts.push(
+          hasAiFailure
+            ? `${result.remainingUncategorized} ainda sem categoria (IA indisponível)`
+            : `${result.sentToAI - result.appliedByAI} enviadas à IA sem aplicar`
+        );
+      } else if (result.remainingUncategorized > 0) {
+        parts.push(`${result.remainingUncategorized} ainda sem categoria`);
+      }
+      if (result.suggestions?.length) parts.push(`${result.suggestions.length} sugestão(ões) para revisar`);
+      if (result.errors.length > 0) {
+        const hasLocalSuccess = result.appliedByCache > 0 || result.appliedByRules > 0;
+        const errorHint = result.errors[0];
+        const alreadySaysUnavailable = hasAiFailure && parts.some((p) => p.includes("IA indisponível"));
+        const description = parts.length
+          ? alreadySaysUnavailable
+            ? `${parts.join(" · ")}. Em localhost: use "supabase functions serve" ou publique a função.`
+            : `${parts.join(" · ")}. ${errorHint}`
+          : errorHint;
+        toast({
+          title: hasLocalSuccess ? "Categorização parcial" : "Categorização com erros",
+          description,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Categorização concluída",
+          description: parts.length ? parts.join(" · ") : "Nenhuma transação sem categoria.",
+        });
+      }
       await loadPendingItems();
     } catch (error) {
+      setCategorizeProgress(null);
+      const msg = error instanceof Error ? error.message : "Tente novamente.";
       toast({
         title: "Erro ao categorizar",
+        description: msg,
         variant: "destructive",
       });
     } finally {
@@ -228,6 +272,7 @@ export default function PendingItems() {
               onRefresh={loadPendingItems}
               householdId={currentHousehold.id}
               isProcessing={isProcessing && processingAction === "categorize_all"}
+              progressMessage={categorizeProgress}
             />
           )}
 

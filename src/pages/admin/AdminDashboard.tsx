@@ -72,7 +72,7 @@ export default function AdminDashboard() {
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <div className="bg-card border-b border-border px-6 py-4">
+      <div className="admin-header-safe bg-card border-b border-border px-6 py-4">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-destructive/20 flex items-center justify-center">
             <Shield className="w-5 h-5 text-destructive" />

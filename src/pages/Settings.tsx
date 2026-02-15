@@ -563,7 +563,7 @@ export default function Settings() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <p className="font-medium text-foreground">Importar CSV</p>
+                    <p className="font-medium text-foreground">Importar Extrato</p>
                     <ProIndicator show={!csvFeature.allowed} />
                   </div>
                   <p className="text-sm text-muted-foreground truncate">

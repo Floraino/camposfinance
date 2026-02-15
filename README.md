@@ -48,6 +48,26 @@ npm run dev
 - **Categorização**: Keywords local + Gemini como fallback para descrições desconhecidas
 - **Clara (chat)**: Assistente financeira com Gemini
 
+### Como ativar "Categorizar com IA"
+
+Se aparecer **"IA indisponível"** ou **"parte sem IA"** ao categorizar transações:
+
+1. **Faça o deploy da Edge Function** (uma vez por projeto):
+   ```sh
+   supabase login
+   supabase link --project-ref SEU_PROJECT_REF
+   supabase functions deploy categorize-transaction
+   ```
+2. **Configure a chave do Gemini** no Supabase:
+   - Dashboard do projeto → **Project Settings** → **Edge Functions** → **Secrets**
+   - Adicione: `GEMINI_API_KEY` = sua chave (obter em https://aistudio.google.com/apikey)
+3. Opcional: sem `GEMINI_API_KEY` a função ainda responde usando **apenas palavras-chave** (fallback). Com a chave, descrições difíceis são enviadas ao Gemini para categorização.
+
+Enquanto a IA não estiver configurada, o app usa **regras locais + cache** (histórico de categorizações manuais), então muitas transações são categorizadas mesmo assim.
+
+**Erro de CORS ao categorizar (localhost)?**  
+A mensagem *"Response to preflight request doesn't pass access control check"* ao rodar o app em `localhost` (ex.: `npm run preview` na porta 4173) costuma significar que a Edge Function **ainda não está publicada** no projeto. O preflight (OPTIONS) recebe 404/502 em vez de 200. Depois de fazer o deploy com `supabase functions deploy categorize-transaction`, a função passa a responder com os headers CORS corretos e o erro some. Alternativa para desenvolvimento: rodar a função localmente com `supabase functions serve categorize-transaction` e usar um projeto Supabase local (`supabase start` + URL local no `.env`).
+
 ## Testes
 
 ```sh

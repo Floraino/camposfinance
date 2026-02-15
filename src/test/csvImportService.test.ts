@@ -11,6 +11,7 @@ import {
   isInvoiceOrCard,
   parseExplicitTransactionType,
   classifyTransaction,
+  shouldImportAsExpense,
   type ColumnMapping,
 } from "@/services/csvImportService";
 
@@ -228,14 +229,14 @@ describe("classifyTransaction", () => {
 });
 
 // =============================================
-// 9) parseCSVWithMappings (single amount + fatura context)
+// 9) parseCSVWithMappings (single amount - só gastos)
 // =============================================
-describe("parseCSVWithMappings with single amount and fatura context", () => {
-  it("imports all rows as expense with abs(amount)", () => {
+describe("parseCSVWithMappings with single amount", () => {
+  it("valor positivo => descartado, valor negativo => importado como gasto", () => {
     const csv = [
       "Data;Descrição;Valor;Categoria",
-      "10/01/2026;Supermercado Fatura Nubank;150,00;Alimentação",
-      "11/01/2026;Outro;-50,00;Outros",
+      "10/01/2026;PIX recebido;250,00;Outros",
+      "11/01/2026;Supermercado;-50,00;Alimentação",
     ].join("\n");
 
     const mappings: ColumnMapping[] = [
@@ -248,9 +249,8 @@ describe("parseCSVWithMappings with single amount and fatura context", () => {
     const rows = parseCSVWithMappings(csv, mappings, ";", true, "dd/MM/yyyy", false);
     expect(rows).toHaveLength(2);
 
-    expect(rows[0].status).toBe("OK");
-    expect(rows[0].parsed?.type).toBe("EXPENSE");
-    expect(rows[0].parsed?.amount).toBe(-150);
+    expect(rows[0].status).toBe("SKIPPED");
+    expect(rows[0].reason).toContain("Entrada ignorada");
 
     expect(rows[1].status).toBe("OK");
     expect(rows[1].parsed?.type).toBe("EXPENSE");
@@ -262,7 +262,7 @@ describe("parseCSVWithMappings with single amount and fatura context", () => {
 // 10) parseCSVWithMappings (Entrada/Saída)
 // =============================================
 describe("parseCSVWithMappings with Entrada/Saída", () => {
-  it("uses only saida for amount; rows with only entrada are skipped", () => {
+  it("linha só com entrada => descartada, linha com saída => importada", () => {
     const csv = [
       "Data;Histórico;Entrada (R$);Saída (R$);Saldo",
       "05/01/2026;Salário;5.000,00;;10.000,00",
@@ -286,5 +286,94 @@ describe("parseCSVWithMappings with Entrada/Saída", () => {
     expect(rows[1].parsed?.type).toBe("EXPENSE");
     expect(rows[1].parsed?.amount).toBe(-350.50);
     expect(rows[1].parsed?.description).toBe("Supermercado");
+  });
+});
+
+// =============================================
+// 11) shouldImportAsExpense
+// =============================================
+describe("shouldImportAsExpense", () => {
+  const cells = (arr: string[]) => arr;
+
+  it("crédito=250, débito vazio => descartado (income_credit)", () => {
+    const r = shouldImportAsExpense(
+      cells(["10/01/2026", "PIX", "250,00", ""]),
+      {
+        credito: { csvColumn: "Crédito", csvIndex: 2, internalField: "credito", confidence: 0.95 },
+        debito: { csvColumn: "Débito", csvIndex: 3, internalField: "debito", confidence: 0.95 },
+      } as Record<string, ColumnMapping>,
+      true
+    );
+    expect(r.import).toBe(false);
+    expect(r.reason).toBe("income_credit");
+  });
+
+  it("débito=29,90 => importado amount=29.90", () => {
+    const r = shouldImportAsExpense(
+      cells(["10/01/2026", "Loja", "", "29,90"]),
+      {
+        credito: { csvColumn: "Crédito", csvIndex: 2, internalField: "credito", confidence: 0.95 },
+        debito: { csvColumn: "Débito", csvIndex: 3, internalField: "debito", confidence: 0.95 },
+      } as Record<string, ColumnMapping>,
+      true
+    );
+    expect(r.import).toBe(true);
+    expect(r.amount).toBe(29.9);
+  });
+
+  it("débito=-29,90 => importado amount=29.90", () => {
+    const r = shouldImportAsExpense(
+      cells(["10/01/2026", "Loja", "", "-29,90"]),
+      {
+        credito: { csvColumn: "Crédito", csvIndex: 2, internalField: "credito", confidence: 0.95 },
+        debito: { csvColumn: "Débito", csvIndex: 3, internalField: "debito", confidence: 0.95 },
+      } as Record<string, ColumnMapping>,
+      true
+    );
+    expect(r.import).toBe(true);
+    expect(r.amount).toBe(29.9);
+  });
+
+  it("valor=1500 => descartado (income_positive_value)", () => {
+    const r = shouldImportAsExpense(
+      cells(["10/01/2026", "Salário", "1.500,00"]),
+      { amount: { csvColumn: "Valor", csvIndex: 2, internalField: "amount", confidence: 0.95 } } as Record<string, ColumnMapping>,
+      false
+    );
+    expect(r.import).toBe(false);
+    expect(r.reason).toBe("income_positive_value");
+  });
+
+  it("valor=-99,90 => importado amount=99.90", () => {
+    const r = shouldImportAsExpense(
+      cells(["10/01/2026", "Compra", "-99,90"]),
+      { amount: { csvColumn: "Valor", csvIndex: 2, internalField: "amount", confidence: 0.95 } } as Record<string, ColumnMapping>,
+      false
+    );
+    expect(r.import).toBe(true);
+    expect(r.amount).toBe(99.9);
+  });
+
+  it("crédito=10 débito=20 => importado (gasto)", () => {
+    const r = shouldImportAsExpense(
+      cells(["10/01/2026", "Ajuste", "10", "20"]),
+      {
+        credito: { csvColumn: "Crédito", csvIndex: 2, internalField: "credito", confidence: 0.95 },
+        debito: { csvColumn: "Débito", csvIndex: 3, internalField: "debito", confidence: 0.95 },
+      } as Record<string, ColumnMapping>,
+      true
+    );
+    expect(r.import).toBe(true);
+    expect(r.amount).toBe(20);
+  });
+
+  it("valor=(99,90) => importado amount=99.90", () => {
+    const r = shouldImportAsExpense(
+      cells(["10/01/2026", "Compra", "(99,90)"]),
+      { amount: { csvColumn: "Valor", csvIndex: 2, internalField: "amount", confidence: 0.95 } } as Record<string, ColumnMapping>,
+      false
+    );
+    expect(r.import).toBe(true);
+    expect(r.amount).toBe(99.9);
   });
 });

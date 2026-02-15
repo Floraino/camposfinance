@@ -20,6 +20,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 
 type FilterCategory = "all" | CategoryType;
 
@@ -133,6 +134,10 @@ export default function Transactions() {
     return matchesSearch && matchesCategory;
   });
 
+  const visibleIds = filteredTransactions.map((tx) => tx.id);
+  const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+  const someSelected = selectedIds.size > 0 && !allSelected;
+
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat("pt-BR", {
       style: "currency",
@@ -213,26 +218,47 @@ export default function Transactions() {
           </div>
         </header>
 
-        {/* Bulk actions bar */}
+        {/* Selection toolbar (tema dark, rounded, ghost) */}
         {selectMode && (
-          <div className="flex items-center gap-3 mb-4 p-3 bg-muted/50 rounded-xl border border-border animate-in-up">
-            <button
-              onClick={toggleSelectAll}
-              className="text-sm font-medium text-primary hover:underline"
-            >
-              {filteredTransactions.length > 0 && filteredTransactions.every((tx) => selectedIds.has(tx.id))
-                ? "Desmarcar todos"
-                : "Selecionar todos"}
-            </button>
-            <span className="flex-1 text-sm text-muted-foreground text-right">
-              {selectedIds.size} selecionado{selectedIds.size !== 1 ? "s" : ""}
+          <div
+            className="flex flex-wrap items-center gap-3 mb-4 p-3 rounded-2xl border border-white/[0.08] bg-white/[0.03] hover:bg-white/[0.06] transition-colors animate-in-up"
+            role="toolbar"
+            aria-label="Seleção de gastos"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <Checkbox
+                id="select-all-gastos"
+                checked={allSelected ? true : someSelected ? "indeterminate" : false}
+                onCheckedChange={() => toggleSelectAll()}
+                className="h-5 w-5 rounded-md border-white/[0.08] bg-white/[0.03] data-[state=checked]:bg-primary data-[state=indeterminate]:bg-primary focus-visible:ring-primary shrink-0"
+                aria-label={allSelected ? "Desmarcar todos" : "Selecionar todos"}
+              />
+              <button
+                onClick={toggleSelectAll}
+                className="text-sm font-semibold text-foreground hover:text-primary transition-colors"
+              >
+                {allSelected ? "Desmarcar todos" : "Selecionar todos"}
+              </button>
+            </div>
+            <span className="text-sm text-muted-foreground tabular-nums">
+              Selecionados: {selectedIds.size}
             </span>
+            {selectedIds.size > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setSelectedIds(new Set())}
+                className="text-muted-foreground hover:text-foreground hover:bg-white/[0.06] rounded-xl"
+              >
+                Limpar
+              </Button>
+            )}
             <Button
               variant="destructive"
               size="sm"
               disabled={selectedIds.size === 0}
               onClick={() => setShowBulkDeleteConfirm(true)}
-              className="gap-1.5"
+              className="gap-1.5 rounded-xl ml-auto"
             >
               <Trash2 className="w-4 h-4" />
               Excluir ({selectedIds.size})
@@ -308,11 +334,12 @@ export default function Transactions() {
                 {txs.map((tx) => (
                   <div key={tx.id} className="flex items-center gap-2">
                     {selectMode && (
-                      <input
-                        type="checkbox"
+                      <Checkbox
+                        id={`select-${tx.id}`}
                         checked={selectedIds.has(tx.id)}
-                        onChange={() => toggleSelect(tx.id)}
-                        className="w-5 h-5 accent-primary shrink-0 rounded"
+                        onCheckedChange={() => toggleSelect(tx.id)}
+                        className="h-5 w-5 rounded-md border-white/[0.08] bg-white/[0.03] data-[state=checked]:bg-primary focus-visible:ring-primary shrink-0"
+                        aria-label={`Selecionar ${tx.description}`}
                       />
                     )}
                     <div className="flex-1 min-w-0">

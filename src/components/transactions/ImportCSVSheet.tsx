@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from "react";
-import { X, Upload, FileSpreadsheet, Loader2, CheckCircle, AlertCircle, ChevronRight, Download, RefreshCw, MinusCircle, ArrowUpCircle, ArrowDownCircle, Wand2, FileDown, FileCheck } from "lucide-react";
+import { X, Upload, FileSpreadsheet, Loader2, CheckCircle, AlertCircle, ChevronRight, Download, RefreshCw, MinusCircle, ArrowDownCircle, Wand2, FileDown, FileCheck } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
@@ -31,6 +31,10 @@ import {
   type ImportTransactionsOptions,
 } from "@/services/csvImportService";
 import {
+  parseFileToCsvContent,
+  isSupportedFile,
+} from "@/services/bankStatementParser";
+import {
   inferInstitutionFromFilename,
   matchInstitutionToHousehold,
   type InstitutionMatchResult,
@@ -51,7 +55,10 @@ type DefaultPaymentMethod = "pix" | "card" | "boleto" | "cash";
 const INTERNAL_FIELDS = [
   { value: "description", label: "Descrição" },
   { value: "amount", label: "Valor" },
+  { value: "entrada", label: "Entrada (Receita)" },
+  { value: "credito", label: "Crédito (R$)" },
   { value: "saida", label: "Saída (Despesa)" },
+  { value: "debito", label: "Débito (R$)" },
   { value: "date", label: "Data" },
   { value: "category", label: "Categoria" },
   { value: "payment_method", label: "Forma de Pagamento" },
@@ -119,10 +126,11 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
   }, [resetState, onClose]);
 
   const handleFileSelect = async (file: File, importMode: ImportMode = "standard") => {
-    if (!file.name.toLowerCase().endsWith(".csv")) {
+    const { supported, error } = isSupportedFile(file);
+    if (!supported) {
       toast({
         title: "Arquivo inválido",
-        description: "Por favor, selecione um arquivo CSV (.csv)",
+        description: error ?? "Use CSV, TXT, XLS ou XLSX",
         variant: "destructive",
       });
       return;
@@ -148,9 +156,16 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
     setMode(importMode);
     
     try {
-      const content = await file.text();
+      const { content, extracted } = await parseFileToCsvContent(file);
       setCsvContent(content);
       setOriginalFilename(file.name);
+
+      if (extracted) {
+        toast({
+          title: "Tabela extraída",
+          description: "Cabeçalho e rodapé ignorados automaticamente",
+        });
+      }
 
       // Infer account/card from filename and match to household (non-blocking)
       if (currentHousehold?.id) {
@@ -219,7 +234,7 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
     } catch (error) {
       console.error("Error analyzing CSV:", error);
       toast({
-        title: "Erro ao analisar CSV",
+        title: "Erro ao analisar arquivo",
         description: error instanceof Error ? error.message : "Não foi possível processar o arquivo",
         variant: "destructive",
       });
@@ -243,8 +258,8 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
         status: "OK" as const,
         parsed: {
           description: c.descricao,
-          amount: c.tipo === "EXPENSE" ? -Math.abs(c.valor) : Math.abs(c.valor),
-          type: c.tipo,
+          amount: -Math.abs(c.valor),
+          type: "EXPENSE",
           category: c.categoria as any,
           payment_method: c.forma_pagamento as any,
           status: "paid" as const,
@@ -311,7 +326,7 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
     } catch (error) {
       console.error("Error parsing CSV:", error);
       toast({
-        title: "Erro ao processar CSV",
+        title: "Erro ao processar arquivo",
         description: error instanceof Error ? error.message : "Erro desconhecido",
         variant: "destructive",
       });
@@ -416,6 +431,9 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
   const skippedCount = parsedRows.filter(r => r.status === "SKIPPED").length;
   const errorCount = parsedRows.filter(r => r.status === "ERROR").length;
   const expenseCount = parsedRows.filter(r => r.status === "OK").length;
+  const ignoredIncomeCount = parsedRows.filter(
+    r => r.status === "SKIPPED" && r.reason?.includes("Entrada ignorada")
+  ).length;
 
   // Get available columns from CSV
   const csvHeaders = analysis?.sampleRows[0]?._raw?.split(analysis.separator).map((h, i) => ({
@@ -436,9 +454,9 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
             <div className="w-12 h-1.5 bg-muted rounded-full" />
           </div>
           
-          <div className="flex items-center justify-between px-4 pb-4 border-b border-border">
+            <div className="flex items-center justify-between px-4 pb-4 border-b border-border">
             <div className="flex items-center gap-2">
-              <h2 className="text-xl font-bold text-foreground">Importar CSV</h2>
+              <h2 className="text-xl font-bold text-foreground">Importar Extrato</h2>
               <ProBadge show={!isPro} />
             </div>
             <Button variant="ghost" size="icon-sm" onClick={handleClose}>
@@ -503,7 +521,7 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                       <>
                         <Loader2 className="w-10 h-10 text-primary animate-spin flex-shrink-0" />
                         <div>
-                          <p className="font-medium text-foreground">Analisando CSV...</p>
+                          <p className="font-medium text-foreground">Analisando arquivo...</p>
                           <p className="text-sm text-muted-foreground">Detectando formato automaticamente</p>
                         </div>
                       </>
@@ -513,9 +531,9 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                           <FileSpreadsheet className="w-6 h-6 text-primary" />
                         </div>
                         <div>
-                          <p className="font-medium text-foreground">Importar CSV</p>
+                          <p className="font-medium text-foreground">Importar Extrato</p>
                           <p className="text-sm text-muted-foreground">
-                            Formato padrão ou extrato de banco
+                            CSV, TXT, XLS ou XLSX — extrato de banco
                           </p>
                         </div>
                       </>
@@ -561,7 +579,7 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".csv"
+                  accept=".csv,.txt,.xls,.xlsx,text/csv,text/plain,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                   className="hidden"
                   onChange={(e) => {
                     if (e.target.files?.[0]) {
@@ -602,13 +620,15 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                 </div>
 
                 <div className="flex items-center justify-center gap-6 text-sm">
-                  <div className="flex items-center gap-2 text-destructive">
-                    <ArrowDownCircle className="w-5 h-5" />
-                    <span className="font-medium">
-                      R$ {conversionResult.summary.totalExpense.toFixed(2)}
-                    </span>
-                    <span className="text-muted-foreground">despesas</span>
-                  </div>
+                  {conversionResult.summary.totalExpense > 0 && (
+                    <div className="flex items-center gap-2 text-destructive">
+                      <ArrowDownCircle className="w-5 h-5" />
+                      <span className="font-medium">
+                        R$ {conversionResult.summary.totalExpense.toFixed(2)}
+                      </span>
+                      <span className="text-muted-foreground">despesas</span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Converted Transactions Table */}
@@ -799,7 +819,7 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                     variant="accent" 
                     onClick={handleContinueToPreview} 
                     className="flex-1"
-                    disabled={isLoading || !columnMappings.some(m => m.internalField === "amount")}
+                    disabled={isLoading || !columnMappings.some(m => ["amount", "entrada", "saida", "credito", "debito"].includes(m.internalField))}
                   >
                     {isLoading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
                     Continuar
@@ -833,6 +853,12 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                       <ArrowDownCircle className="w-4 h-4" />
                       <span>{expenseCount} despesas</span>
                     </div>
+                    {ignoredIncomeCount > 0 && (
+                      <div className="flex items-center gap-1 text-muted-foreground">
+                        <MinusCircle className="w-4 h-4" />
+                        <span>Ignorados (entradas): {ignoredIncomeCount}</span>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -978,7 +1004,7 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                               </TableCell>
                               <TableCell>
                                 <Badge variant="outline" className="text-xs bg-destructive/10 text-destructive border-destructive/30">
-                                  Despesa
+                                  Gasto
                                 </Badge>
                               </TableCell>
                             </TableRow>
@@ -1095,7 +1121,7 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
             {/* Step 5: Result */}
             {step === "result" && importResult && (
               <>
-                <div className="flex flex-col items-center gap-4 py-4">
+                <div className="flex flex-col items-center gap-4 py-4" key="result-step">
                   <div className="w-16 h-16 rounded-full bg-primary/20 flex items-center justify-center">
                     <CheckCircle className="w-8 h-8 text-primary" />
                   </div>
@@ -1116,6 +1142,12 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                     <p className="text-xs text-muted-foreground">Falharam</p>
                   </div>
                 </div>
+
+                {ignoredIncomeCount > 0 && (
+                  <p className="text-sm text-muted-foreground text-center">
+                    Ignorados (entradas): {ignoredIncomeCount}
+                  </p>
+                )}
 
                 {importResult.errors.length > 0 && (
                   <div className="glass-card p-4 bg-destructive/10">

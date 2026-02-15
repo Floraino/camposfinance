@@ -40,8 +40,8 @@ export const PRO_FEATURES: Record<ProFeatureKey, ProFeatureConfig> = {
   },
   CSV_IMPORT: {
     key: "CSV_IMPORT",
-    name: "Importar CSV",
-    description: "Importe transações em massa via planilha CSV",
+    name: "Importar Extrato",
+    description: "Importe transações em massa via CSV, TXT, XLS ou XLSX",
     icon: "file",
   },
   DATA_EXPORT: {

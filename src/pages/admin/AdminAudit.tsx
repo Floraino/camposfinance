@@ -80,7 +80,7 @@ export default function AdminAudit() {
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <div className="bg-card border-b border-border px-4 py-3">
+      <div className="admin-header-safe bg-card border-b border-border px-4 py-3">
         <div className="flex items-center gap-3">
           <Link to="/admin">
             <Button variant="ghost" size="icon">

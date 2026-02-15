@@ -1,9 +1,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const corsHeaders = {
+const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
+  "Access-Control-Max-Age": "86400",
 };
 
 const CATEGORIES = [
@@ -19,7 +21,7 @@ const CATEGORIES = [
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
+    return new Response(null, { status: 200, headers: corsHeaders });
   }
 
   try {
@@ -68,7 +70,7 @@ serve(async (req) => {
               break;
             }
           }
-          return { id: d.id, category: matched };
+          return { id: d.id, category: matched, confidence: 0.8 };
         });
         console.log(`[categorize][${traceId}] Batch done via keywords (no AI key)`);
         return new Response(JSON.stringify({ categories }), {
@@ -91,8 +93,8 @@ Categorize cada uma das seguintes descrições de transações em UMA das catego
 Transações para categorizar:
 ${descriptions.map((d: { id: string; description: string }, i: number) => `${i + 1}. [ID: ${d.id}] ${d.description}`).join("\n")}
 
-Responda APENAS com um JSON array no formato:
-[{"id": "uuid", "category": "categoria"}]`;
+Responda APENAS com um JSON array no formato (confidence entre 0 e 1, use 0.9+ quando tiver certeza):
+[{"id": "uuid", "category": "categoria", "confidence": 0.95}]`;
 
       try {
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
@@ -117,7 +119,7 @@ Responda APENAS com um JSON array no formato:
                 break;
               }
             }
-            return { id: d.id, category: matched };
+            return { id: d.id, category: matched, confidence: 0.8 };
           });
           return new Response(JSON.stringify({ categories }), {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -130,13 +132,18 @@ Responda APENAS com um JSON array no formato:
         
         // Extract JSON from response
         const jsonMatch = content.match(/\[[\s\S]*\]/);
-        let categories;
+        let rawCategories: Array<{ id: string; category: string; confidence?: number }>;
         try {
-          categories = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
+          rawCategories = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
         } catch (parseErr) {
           console.error(`[categorize][${traceId}] Failed to parse Gemini batch response`);
-          categories = [];
+          rawCategories = [];
         }
+        const categories = rawCategories.map((c: { id: string; category: string; confidence?: number }) => ({
+          id: c.id,
+          category: c.category || "other",
+          confidence: typeof c.confidence === "number" ? c.confidence : 0.85,
+        }));
 
         console.log(`[categorize][${traceId}] Batch done via Gemini: ${categories.length} results`);
         return new Response(JSON.stringify({ categories }), {
@@ -153,7 +160,7 @@ Responda APENAS com um JSON array no formato:
               break;
             }
           }
-          return { id: d.id, category: matched };
+          return { id: d.id, category: matched, confidence: 0.8 };
         });
         return new Response(JSON.stringify({ categories }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },

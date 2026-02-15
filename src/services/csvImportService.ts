@@ -34,8 +34,8 @@ export interface ParsedRow {
   status: ParsedRowStatus;
   parsed: {
     description: string;
-    amount: number; // sempre negativo (despesa)
-    type: "EXPENSE"; // app só controla despesas
+    amount: number; // sempre negativo (gasto)
+    type: "EXPENSE";
     category: CategoryType;
     payment_method: "pix" | "boleto" | "card" | "cash";
     status: "paid" | "pending";
@@ -55,11 +55,11 @@ export interface ImportResult {
   duplicates: number;
   failed: number;
   errors: { row: number; reason: string }[];
-  /** Same as imported; returned by edge for clarity */
+  /** Linhas descartadas por serem entradas (app controla apenas gastos) */
+  ignoredIncome?: number;
   createdCount?: number;
   linkedAccountId?: string | null;
   linkedCardId?: string | null;
-  /** Payment method applied to all imported rows (edge/directImport). */
   appliedPaymentMethod?: DefaultPaymentMethodType;
 }
 
@@ -195,11 +195,12 @@ function localAnalyzeCSV(csvContent: string): CSVAnalysis {
   const dataStartIndex = isHeader ? 1 : 0;
   const dataRows = rows.slice(dataStartIndex, 50 + dataStartIndex);
 
-  // Detect Entrada/Saída
   const lowerHeaders = headers.map(h => h.toLowerCase().trim());
   const entradaIndex = lowerHeaders.findIndex(h => /entrada/i.test(h));
   const saidaIndex = lowerHeaders.findIndex(h => /sa[ií]da/i.test(h));
-  const hasEntradaSaida = entradaIndex >= 0 && saidaIndex >= 0;
+  const creditoIndex = lowerHeaders.findIndex(h => /cr[eé]dito/i.test(h));
+  const debitoIndex = lowerHeaders.findIndex(h => /d[eé]bito/i.test(h));
+  const hasEntradaSaida = (entradaIndex >= 0 && saidaIndex >= 0) || (creditoIndex >= 0 && debitoIndex >= 0);
 
   // Rule-based column mapping
   const columnMappings: ColumnMapping[] = [];
@@ -218,11 +219,11 @@ function localAnalyzeCSV(csvContent: string): CSVAnalysis {
     const h = lowerHeaders[i];
     if (/saldo|balance/i.test(h)) continue; // skip saldo
 
-    if (hasEntradaSaida && i === entradaIndex) {
-      columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: "entrada", confidence: 0.95 });
+    if ((hasEntradaSaida && i === entradaIndex) || (creditoIndex >= 0 && i === creditoIndex)) {
+      columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: creditoIndex >= 0 && i === creditoIndex ? "credito" : "entrada", confidence: 0.95 });
       usedIndices.add(i);
-    } else if (hasEntradaSaida && i === saidaIndex) {
-      columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: "saida", confidence: 0.95 });
+    } else if ((hasEntradaSaida && i === saidaIndex) || (debitoIndex >= 0 && i === debitoIndex)) {
+      columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: debitoIndex >= 0 && i === debitoIndex ? "debito" : "saida", confidence: 0.95 });
       usedIndices.add(i);
     } else if (/^(data|date|dia|dt|movimenta)/i.test(h)) {
       columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: "date", confidence: 0.9 });
@@ -353,6 +354,65 @@ export function parseLocalizedNumber(value: string | number | null): number | nu
   if (isNaN(parsed)) return null;
 
   return isNegativeParens ? -Math.abs(parsed) : parsed;
+}
+
+/**
+ * Resultado da decisão: importar linha como gasto ou descartar.
+ * App controla apenas gastos — entradas são ignoradas.
+ */
+export interface ShouldImportAsExpenseResult {
+  import: boolean;
+  /** Valor positivo do gasto (para persistir como -amount) */
+  amount?: number;
+  /** Motivo quando import=false (income_credit, income_positive_value, no_amount, zero_value) */
+  reason?: string;
+}
+
+/**
+ * Verifica se a linha deve ser importada como gasto.
+ * Entradas (crédito ou valor positivo) são descartadas.
+ */
+export function shouldImportAsExpense(
+  cells: string[],
+  mappingByField: Record<string, ColumnMapping>,
+  hasCreditoDebitoColumns: boolean
+): ShouldImportAsExpenseResult {
+  const creditoCol = mappingByField["credito"] ?? mappingByField["entrada"];
+  const debitoCol = mappingByField["debito"] ?? mappingByField["saida"];
+
+  // A) Colunas Crédito/Débito
+  if (hasCreditoDebitoColumns && (creditoCol || debitoCol)) {
+    const creditoStr = creditoCol ? cells[creditoCol.csvIndex] ?? "" : "";
+    const debitoStr = debitoCol ? cells[debitoCol.csvIndex] ?? "" : "";
+    const creditoVal = parseLocalizedNumber(creditoStr);
+    const debitoVal = parseLocalizedNumber(debitoStr);
+    const hasCredito = creditoVal !== null && creditoVal !== 0;
+    const hasDebito = debitoVal !== null && debitoVal !== 0;
+
+    if (hasDebito) {
+      return { import: true, amount: Math.abs(debitoVal) };
+    }
+    if (hasCredito) {
+      return { import: false, reason: "income_credit" };
+    }
+    return { import: false, reason: "no_amount" };
+  }
+
+  // B) Coluna Valor única
+  const amountCol = mappingByField["amount"];
+  if (amountCol) {
+    const valorStr = cells[amountCol.csvIndex] ?? "";
+    const v = parseLocalizedNumber(valorStr);
+    if (v !== null && v !== 0) {
+      if (v < 0) {
+        return { import: true, amount: Math.abs(v) };
+      }
+      return { import: false, reason: "income_positive_value" };
+    }
+    return { import: false, reason: "zero_value" };
+  }
+
+  return { import: false, reason: "no_amount" };
 }
 
 /**
@@ -584,10 +644,11 @@ export function parseCSVWithMappings(
     mappingByField[m.internalField] = m;
   }
 
-  // Check if we have entrada/saida mappings
   const entradaCol = mappingByField["entrada"];
   const saidaCol = mappingByField["saida"];
-  const hasEntradaSaidaMappings = !!entradaCol || !!saidaCol;
+  const creditoCol = mappingByField["credito"];
+  const debitoCol = mappingByField["debito"];
+  const hasCreditoDebitoColumns = !!(entradaCol || saidaCol || creditoCol || debitoCol);
 
   for (let i = startIndex; i < lines.length; i++) {
     const line = lines[i];
@@ -634,41 +695,31 @@ export function parseCSVWithMappings(
 
     const rowContext = `${description} ${cells.join(" ")}`.trim();
 
-    // Parse amount: app só controla despesas — toda linha vira despesa com abs(valor)
-    let amount: number | null = null;
+    const expenseCheck = shouldImportAsExpense(cells, mappingByField, hasCreditoDebitoColumns);
 
-    if (hasEntradaSaidaMappings) {
-      const entradaStr = entradaCol ? cells[entradaCol.csvIndex] || "" : "";
-      const saidaStr = saidaCol ? cells[saidaCol.csvIndex] || "" : "";
-      const saidaValue = parseLocalizedNumber(saidaStr);
-      const entradaValue = parseLocalizedNumber(entradaStr);
-      if (saidaValue !== null && saidaValue !== 0) {
-        amount = Math.abs(saidaValue);
-      } else if (entradaValue !== null && entradaValue !== 0) {
-        // Linha só com entrada: ignorar (não importamos receitas)
-        results.push({
-          rowIndex: i + 1,
-          raw: line,
-          status: "SKIPPED",
-          parsed: null,
-          errors: [],
-          reason: "Entrada ignorada — app controla apenas despesas",
-        });
-        continue;
-      } else {
-        errors.push("Valor não encontrado (use coluna Saída para despesas)");
-      }
-    } else {
-      const amountStr = amountCol ? cells[amountCol.csvIndex] : "";
-      const rawAmount = parseLocalizedNumber(amountStr);
-      if (rawAmount !== null) {
-        const classified = classifyTransaction({ rowContext, rawAmount });
-        amount = classified.amountNormalized;
-      } else if (amountStr) {
-        errors.push(`Valor inválido: "${amountStr}"`);
-      } else {
-        errors.push("Valor não encontrado");
-      }
+    if (!expenseCheck.import) {
+      const reason =
+        expenseCheck.reason === "income_credit" || expenseCheck.reason === "income_positive_value"
+          ? "Entrada ignorada — app controla apenas gastos"
+          : expenseCheck.reason === "no_amount"
+            ? "Valor não encontrado"
+            : expenseCheck.reason === "zero_value"
+              ? "Valor zero"
+              : "Não importável";
+      results.push({
+        rowIndex: i + 1,
+        raw: line,
+        status: "SKIPPED",
+        parsed: null,
+        errors: [],
+        reason,
+      });
+      continue;
+    }
+
+    const amount = expenseCheck.amount ?? null;
+    if (amount === null || amount === 0) {
+      errors.push("Valor não encontrado");
     }
 
     // Parse date - NEVER default to today silently
@@ -716,9 +767,8 @@ export function parseCSVWithMappings(
         reason: dateWarning || errors[0] || "Data inválida ou ausente",
         requiresDateConfirmation,
       } as ParsedRow);
-    } else if (!hasAmountError && transaction_date) {
+    } else if (!hasAmountError && transaction_date && amount !== null) {
       const finalAmount = -Math.abs(amount);
-
       results.push({
         rowIndex: i + 1,
         raw: line,
@@ -1024,9 +1074,8 @@ export function parseStandardCSV(csvContent: string): ParsedRow[] {
       continue;
     }
     
-    // Parse amount — app só controla despesas
-    const amount = parseLocalizedNumber(valorStr);
-    if (amount === null || amount === 0) {
+    const rawAmount = parseLocalizedNumber(valorStr);
+    if (rawAmount === null || rawAmount === 0) {
       results.push({
         rowIndex: i + 1,
         raw: line,
@@ -1037,17 +1086,33 @@ export function parseStandardCSV(csvContent: string): ParsedRow[] {
       });
       continue;
     }
-    
-    const category: CategoryType = categoryMapping[categoryStr?.toLowerCase() || ""] || 
-                                   inferCategory(description) || 
+
+    const tipoUpper = (typeStr ?? "").toUpperCase().trim();
+    const tipoIndicaDespesa = /^(EXPENSE|DESPESA|DEBITO|DÉBITO|SAIDA|SAÍDA)$/i.test(tipoUpper);
+    const isGasto = rawAmount < 0 || (rawAmount > 0 && tipoIndicaDespesa);
+
+    if (!isGasto) {
+      results.push({
+        rowIndex: i + 1,
+        raw: line,
+        status: "SKIPPED",
+        parsed: null,
+        errors: [],
+        reason: "Entrada ignorada — app controla apenas gastos",
+      });
+      continue;
+    }
+
+    const finalAmount = -Math.abs(rawAmount);
+
+    const category: CategoryType = categoryMapping[categoryStr?.toLowerCase() || ""] ||
+                                   inferCategory(description) ||
                                    "other";
-    
-    const payment_method = paymentMapping[paymentStr?.toLowerCase() || ""] || 
-                          inferPaymentMethod(description) || 
+
+    const payment_method = paymentMapping[paymentStr?.toLowerCase() || ""] ||
+                          inferPaymentMethod(description) ||
                           "pix";
-    
-    const finalAmount = -Math.abs(amount);
-    
+
     results.push({
       rowIndex: i + 1,
       raw: line,
@@ -1110,14 +1175,13 @@ export async function convertBankStatement(csvContent: string): Promise<Conversi
     analysis.hasEntradaSaida
   );
   
-  // Convert to standard format
   const converted: ConvertedTransaction[] = parsedRows.map(row => {
     if (row.status === "OK" && row.parsed) {
       const parsed = row.parsed;
       return {
         data: parsed.transaction_date,
         descricao: parsed.description,
-        tipo: parsed.type,
+        tipo: "EXPENSE",
         valor: Math.abs(parsed.amount),
         categoria: parsed.category,
         forma_pagamento: parsed.payment_method,

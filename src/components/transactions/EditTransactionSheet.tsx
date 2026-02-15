@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { CategoryBadge, categoryConfig, type CategoryType } from "@/components/ui/CategoryBadge";
 import { cn } from "@/lib/utils";
 import { type Transaction, type NewTransaction, updateTransaction, deleteTransaction } from "@/services/transactionService";
+import { merchantFingerprint } from "@/services/categorizationEngine";
+import { setCache } from "@/services/merchantCategoryCacheService";
 import { getFamilyMembers, type FamilyMember } from "@/services/familyService";
 import { getHouseholdAccounts, type Account } from "@/services/householdService";
 import { getCreditCards, type CreditCard } from "@/services/creditCardService";
@@ -117,7 +119,10 @@ export function EditTransactionSheet({ isOpen, transaction, onClose, onUpdate, h
         account_id: selectedAccountId ?? null,
         credit_card_id: paymentMethod === "card" ? (selectedCardId ?? null) : null,
       });
-      
+      try {
+        const fp = merchantFingerprint(description);
+        if (fp) await setCache(householdId, fp, category, 1.0);
+      } catch (_) { /* cache opcional */ }
       // Invalidar saldo de contas e dados de cartões após editar transação
       queryClient.invalidateQueries({ queryKey: ["accounts", householdId] });
 
