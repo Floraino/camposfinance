@@ -87,6 +87,25 @@ Se der erro em alguma (por exemplo “relation already exists”), anote e siga 
    ```
    Isso aplica todas as migrations de uma vez.
 
+   Ou use o script do projeto:
+   ```bash
+   npm run db:push
+   ```
+
+### Opção C – Migrations automáticas (GitHub Actions)
+
+Sempre que houver **novas migrations** em `supabase/migrations/` e você der **push na branch `main`**, o workflow aplica as migrations no banco remoto.
+
+**Configuração (uma vez):** no repositório, vá em **Settings → Secrets and variables → Actions** e crie:
+
+| Secret | Descrição |
+|--------|-----------|
+| `SUPABASE_ACCESS_TOKEN` | Token em https://supabase.com/dashboard/account/tokens |
+| `SUPABASE_DB_PASSWORD` | Senha do banco do projeto |
+| `SUPABASE_PROJECT_REF` | (opcional) ID do projeto; se não definir, usa o `project_id` do `supabase/config.toml` |
+
+O workflow está em `.github/workflows/supabase-migrate.yml`. Você também pode rodar manualmente em **Actions → Supabase migrations → Run workflow**.
+
 ---
 
 ## 6. Configurar Auth (login)

@@ -165,8 +165,8 @@ export function ReceiptScanner({ isOpen, onClose, onTransactionAdded, onContinue
 
         // Provide helpful error messages based on common failure modes
         let userMessage = "Tente novamente";
-        if (error.message?.includes("GEMINI_API_KEY") || error.message?.includes("AI_NOT_CONFIGURED")) {
-          userMessage = "Chave de IA (Gemini) não configurada no servidor. Contate o administrador.";
+        if (error.message?.includes("MANUS_API_KEY") || error.message?.includes("AI_NOT_CONFIGURED")) {
+          userMessage = "Chave de IA (Manus) não configurada no servidor. Contate o administrador.";
         } else if (error.message?.includes("Supabase configuration")) {
           userMessage = "Configuração do servidor incompleta. Contate o administrador.";
         } else if (error.message?.includes("Edge Function")) {

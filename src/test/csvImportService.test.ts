@@ -3,7 +3,6 @@ import {
   parseLocalizedNumber,
   parseDate,
   inferCategory,
-  inferPaymentMethod,
   generateImportHash,
   parseCSVWithMappings,
   isStandardFormat,
@@ -14,6 +13,11 @@ import {
   shouldImportAsExpense,
   type ColumnMapping,
 } from "@/services/csvImportService";
+
+// Helper to test parseDate with Date objects
+function createDate(year: number, month: number, day: number): Date {
+  return new Date(year, month - 1, day);
+}
 
 // =============================================
 // 1) parseLocalizedNumber
@@ -66,6 +70,54 @@ describe("parseDate", () => {
     expect(parseDate("15/01/2026")).toBe("2026-01-15");
   });
 
+  it("parses Date objects", () => {
+    const date = new Date(2026, 0, 15); // January 15, 2026
+    expect(parseDate(date)).toBe("2026-01-15");
+  });
+
+  it("parses Excel serial dates (number)", () => {
+    // Excel serial dates: day 0 = Dec 30, 1899
+    // Calculate serial for known dates
+    const excelEpoch = new Date(1899, 11, 30);
+    const date1 = new Date(2026, 0, 1); // Jan 1, 2026
+    const serial1 = Math.round((date1.getTime() - excelEpoch.getTime()) / 86400000);
+    const result1 = parseDate(serial1);
+    expect(result1).toBe("2026-01-01");
+    
+    const date2 = new Date(2025, 10, 14); // Nov 14, 2025
+    const serial2 = Math.round((date2.getTime() - excelEpoch.getTime()) / 86400000);
+    const result2 = parseDate(serial2);
+    expect(result2).toBe("2025-11-14");
+  });
+
+  it("parses dates with time component", () => {
+    expect(parseDate("14/11/2025 00:00:00")).toBe("2025-11-14");
+    expect(parseDate("14/11/2025 10:30:00")).toBe("2025-11-14");
+    expect(parseDate("2025-11-14 23:59:59")).toBe("2025-11-14");
+  });
+
+  it("parses DD/MM/YYYY format (credit card format - user case)", () => {
+    expect(parseDate("14/11/2025")).toBe("2025-11-14");
+    expect(parseDate("06/12/2025")).toBe("2025-12-06");
+    expect(parseDate("31/01/2026")).toBe("2026-01-31");
+  });
+
+  it("parses DD/MM/YYYY with leading zeros", () => {
+    expect(parseDate("01/01/2026")).toBe("2026-01-01");
+    expect(parseDate("09/05/2026")).toBe("2026-05-09");
+  });
+
+  it("handles dates with whitespace", () => {
+    expect(parseDate(" 14/11/2025 ")).toBe("2025-11-14");
+    expect(parseDate("14/11/2025  ")).toBe("2025-11-14");
+  });
+
+  it("rejects invalid dates", () => {
+    expect(parseDate("31/02/2026")).toBe(null); // Invalid date
+    expect(parseDate("32/01/2026")).toBe(null); // Invalid day
+    expect(parseDate("15/13/2026")).toBe(null); // Invalid month
+  });
+
   it("parses DD-MM-YYYY", () => {
     expect(parseDate("15-01-2026")).toBe("2026-01-15");
   });
@@ -107,21 +159,9 @@ describe("inferCategory", () => {
 });
 
 // =============================================
-// 4) inferPaymentMethod
+// 4) inferPaymentMethod - REMOVED
+// Payment method inference was removed from the app
 // =============================================
-describe("inferPaymentMethod", () => {
-  it("detects pix", () => {
-    expect(inferPaymentMethod("PIX Recebido")).toBe("pix");
-  });
-
-  it("detects card from 'cartão'", () => {
-    expect(inferPaymentMethod("Cartão de Crédito")).toBe("card");
-  });
-
-  it("defaults to pix for unknown", () => {
-    expect(inferPaymentMethod("Transferência")).toBe("pix");
-  });
-});
 
 // =============================================
 // 5) generateImportHash (deduplication)
@@ -145,7 +185,7 @@ describe("generateImportHash", () => {
 // =============================================
 describe("isStandardFormat", () => {
   it("recognizes standard CSV header", () => {
-    const csv = "data,descricao,tipo,valor,categoria,forma_pagamento,conta\n2026-01-15,Test,EXPENSE,100,other,pix,";
+    const csv = "data,descricao,tipo,valor,categoria,conta\n2026-01-15,Test,EXPENSE,100,other,";
     expect(isStandardFormat(csv)).toBe(true);
   });
 
@@ -159,14 +199,14 @@ describe("isStandardFormat", () => {
 // 7) parseStandardCSV
 // =============================================
 describe("parseStandardCSV", () => {
-  it("parses a valid standard CSV (all as expense)", () => {
+  it("parses a valid standard CSV (bank_account: saídas negativas importadas)", () => {
     const csv = [
-      "data,descricao,tipo,valor,categoria,forma_pagamento,conta",
-      "2026-01-15,Supermercado,EXPENSE,350.50,food,card,Conta Corrente",
-      "2026-01-16,Outro,EXPENSE,100.00,other,pix,Conta Corrente",
+      "data,descricao,tipo,valor,categoria,conta",
+      "2026-01-15,Supermercado,EXPENSE,-350.50,food,Conta Corrente",
+      "2026-01-16,Outro,EXPENSE,-100.00,other,Conta Corrente",
     ].join("\n");
 
-    const rows = parseStandardCSV(csv);
+    const rows = parseStandardCSV(csv, "bank_account");
     expect(rows).toHaveLength(2);
     expect(rows[0].status).toBe("OK");
     expect(rows[0].parsed?.description).toBe("Supermercado");
@@ -178,13 +218,85 @@ describe("parseStandardCSV", () => {
 
   it("marks rows with invalid dates as ERROR", () => {
     const csv = [
-      "data,descricao,tipo,valor,categoria,forma_pagamento,conta",
-      ",Compra sem data,EXPENSE,100,other,pix,",
+      "data,descricao,tipo,valor,categoria,conta",
+      ",Compra sem data,EXPENSE,100,other,",
     ].join("\n");
 
     const rows = parseStandardCSV(csv);
     expect(rows).toHaveLength(1);
     expect(rows[0].status).toBe("ERROR");
+  });
+
+  it("credit_card: negative value => OK as expense (purchase)", () => {
+    const csv = [
+      "data,descricao,tipo,valor,categoria,conta",
+      "2026-01-15,Supermercado,EXPENSE,-100,food,",
+    ].join("\n");
+
+    const rows = parseStandardCSV(csv, "credit_card");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe("OK");
+    expect(rows[0].parsed?.amount).toBe(-100); // Keep negative as-is
+  });
+
+  it("credit_card: polaridade positiva (maioria positiva) => valor positivo importado como gasto", () => {
+    const csv = [
+      "data,descricao,tipo,valor,categoria,conta",
+      "2026-01-15,Supermercado,EXPENSE,500,other,",
+      "2026-01-16,Farmácia,EXPENSE,30,other,",
+    ].join("\n");
+
+    const rows = parseStandardCSV(csv, "credit_card");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].status).toBe("OK");
+    expect(rows[0].parsed?.amount).toBe(-500);
+    expect(rows[1].status).toBe("OK");
+    expect(rows[1].parsed?.amount).toBe(-30);
+  });
+
+  it("credit_card: polaridade negativa (maioria negativa) => positivo SKIPPED", () => {
+    const csv = [
+      "data,descricao,tipo,valor,categoria,conta",
+      "2026-01-15,Supermercado,EXPENSE,-100,food,",
+      "2026-01-16,Farmácia,EXPENSE,-50,other,",
+      "2026-01-17,Pagamento,EXPENSE,200,other,",
+    ].join("\n");
+
+    const rows = parseStandardCSV(csv, "credit_card");
+    expect(rows).toHaveLength(3);
+    expect(rows[0].status).toBe("OK");
+    expect(rows[0].parsed?.amount).toBe(-100);
+    expect(rows[1].status).toBe("OK");
+    expect(rows[1].parsed?.amount).toBe(-50);
+    expect(rows[2].status).toBe("SKIPPED");
+    expect(rows[2].reason).toContain("Pagamento ou estorno ignorado");
+  });
+
+  it("bank_account: positive => SKIPPED (entrada), negative => OK (saída)", () => {
+    const csv = [
+      "data,descricao,tipo,valor,categoria,conta",
+      "2026-01-15,Pagamento,EXPENSE,-1120,other,",
+      "2026-01-16,Depósito,INCOME,200,other,",
+    ].join("\n");
+
+    const rows = parseStandardCSV(csv, "bank_account");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].status).toBe("OK");
+    expect(rows[0].parsed?.amount).toBe(-1120);
+    expect(rows[1].status).toBe("SKIPPED");
+    expect(rows[1].reason).toContain("Entrada ignorada (conta corrente)");
+  });
+
+  it("bank_account: positive without EXPENSE type => still SKIPPED (entrada)", () => {
+    const csv = [
+      "data,descricao,tipo,valor,categoria,conta",
+      "2026-01-15,PIX recebido,INCOME,200,other,",
+    ].join("\n");
+
+    const rows = parseStandardCSV(csv, "bank_account");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe("SKIPPED");
+    expect(rows[0].reason).toContain("Entrada ignorada (conta corrente)");
   });
 });
 
@@ -232,7 +344,7 @@ describe("classifyTransaction", () => {
 // 9) parseCSVWithMappings (single amount - só gastos)
 // =============================================
 describe("parseCSVWithMappings with single amount", () => {
-  it("valor positivo => descartado, valor negativo => importado como gasto", () => {
+  it("bank_account: valor positivo => ignorado (entrada), valor negativo => importado (saída)", () => {
     const csv = [
       "Data;Descrição;Valor;Categoria",
       "10/01/2026;PIX recebido;250,00;Outros",
@@ -246,15 +358,83 @@ describe("parseCSVWithMappings with single amount", () => {
       { csvColumn: "Categoria", csvIndex: 3, internalField: "category", confidence: 0.8 },
     ];
 
-    const rows = parseCSVWithMappings(csv, mappings, ";", true, "dd/MM/yyyy", false);
+    const rows = parseCSVWithMappings(csv, mappings, ";", true, "dd/MM/yyyy", false, "bank_account");
     expect(rows).toHaveLength(2);
 
     expect(rows[0].status).toBe("SKIPPED");
-    expect(rows[0].reason).toContain("Entrada ignorada");
+    expect(rows[0].reason).toContain("Entrada ignorada (conta corrente)");
 
     expect(rows[1].status).toBe("OK");
-    expect(rows[1].parsed?.type).toBe("EXPENSE");
     expect(rows[1].parsed?.amount).toBe(-50);
+  });
+
+  it("bank_account: -1120 => OK (saída), +200 => SKIPPED (entrada)", () => {
+    const csv = [
+      "Data;Descrição;Valor;Categoria",
+      "10/01/2026;Pagamento;-1120,00;Outros",
+      "11/01/2026;Depósito;200,00;Outros",
+    ].join("\n");
+
+    const mappings: ColumnMapping[] = [
+      { csvColumn: "Data", csvIndex: 0, internalField: "date", confidence: 0.95 },
+      { csvColumn: "Descrição", csvIndex: 1, internalField: "description", confidence: 0.95 },
+      { csvColumn: "Valor", csvIndex: 2, internalField: "amount", confidence: 0.95 },
+      { csvColumn: "Categoria", csvIndex: 3, internalField: "category", confidence: 0.8 },
+    ];
+
+    const rows = parseCSVWithMappings(csv, mappings, ";", true, "dd/MM/yyyy", false, "bank_account");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].status).toBe("OK");
+    expect(rows[0].parsed?.amount).toBe(-1120);
+    expect(rows[1].status).toBe("SKIPPED");
+    expect(rows[1].reason).toContain("Entrada ignorada (conta corrente)");
+  });
+
+  it("credit_card: polaridade negativa => negativos OK, positivo SKIPPED", () => {
+    const csv = [
+      "Data;Descrição;Valor;Categoria",
+      "10/01/2026;Supermercado;-100,00;Alimentação",
+      "11/01/2026;Farmácia;-50,00;Saúde",
+      "12/01/2026;Pagamento;200,00;Outros",
+    ].join("\n");
+
+    const mappings: ColumnMapping[] = [
+      { csvColumn: "Data", csvIndex: 0, internalField: "date", confidence: 0.95 },
+      { csvColumn: "Descrição", csvIndex: 1, internalField: "description", confidence: 0.95 },
+      { csvColumn: "Valor", csvIndex: 2, internalField: "amount", confidence: 0.95 },
+      { csvColumn: "Categoria", csvIndex: 3, internalField: "category", confidence: 0.8 },
+    ];
+
+    const rows = parseCSVWithMappings(csv, mappings, ";", true, "dd/MM/yyyy", false, "credit_card");
+    expect(rows).toHaveLength(3);
+    expect(rows[0].status).toBe("OK");
+    expect(rows[0].parsed?.amount).toBe(-100);
+    expect(rows[1].status).toBe("OK");
+    expect(rows[1].parsed?.amount).toBe(-50);
+    expect(rows[2].status).toBe("SKIPPED");
+    expect(rows[2].reason).toContain("Pagamento ou estorno ignorado");
+  });
+
+  it("credit_card: polaridade positiva => positivos OK (como gasto), negativo SKIPPED", () => {
+    const csv = [
+      "Data;Descrição;Valor;Categoria",
+      "10/01/2026;Supermercado;100,00;Alimentação",
+      "11/01/2026;Pagamento;-200,00;Outros",
+    ].join("\n");
+
+    const mappings: ColumnMapping[] = [
+      { csvColumn: "Data", csvIndex: 0, internalField: "date", confidence: 0.95 },
+      { csvColumn: "Descrição", csvIndex: 1, internalField: "description", confidence: 0.95 },
+      { csvColumn: "Valor", csvIndex: 2, internalField: "amount", confidence: 0.95 },
+      { csvColumn: "Categoria", csvIndex: 3, internalField: "category", confidence: 0.8 },
+    ];
+
+    const rows = parseCSVWithMappings(csv, mappings, ";", true, "dd/MM/yyyy", false, "credit_card");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].status).toBe("OK");
+    expect(rows[0].parsed?.amount).toBe(-100);
+    expect(rows[1].status).toBe("SKIPPED");
+    expect(rows[1].reason).toContain("Pagamento ou estorno ignorado");
   });
 });
 
@@ -375,5 +555,27 @@ describe("shouldImportAsExpense", () => {
     );
     expect(r.import).toBe(true);
     expect(r.amount).toBe(99.9);
+  });
+
+  it("credit_card: valor negativo => importado amount=-500 (purchase)", () => {
+    const r = shouldImportAsExpense(
+      cells(["10/01/2026", "Supermercado", "-500,00"]),
+      { amount: { csvColumn: "Valor", csvIndex: 2, internalField: "amount", confidence: 0.95 } } as Record<string, ColumnMapping>,
+      false,
+      "credit_card"
+    );
+    expect(r.import).toBe(true);
+    expect(r.amount).toBe(-500); // Keep negative as-is
+  });
+
+  it("credit_card: valor positivo => descartado (positive_value_cartao)", () => {
+    const r = shouldImportAsExpense(
+      cells(["10/01/2026", "Pagamento", "500,00"]),
+      { amount: { csvColumn: "Valor", csvIndex: 2, internalField: "amount", confidence: 0.95 } } as Record<string, ColumnMapping>,
+      false,
+      "credit_card"
+    );
+    expect(r.import).toBe(false);
+    expect(r.reason).toBe("positive_value_cartao");
   });
 });

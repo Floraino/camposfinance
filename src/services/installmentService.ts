@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { sanitizeTransactionForInsert } from "./transactionSanitizer";
 import type { CategoryType } from "@/components/ui/CategoryBadge";
 
 export interface InstallmentGroup {
@@ -76,7 +77,6 @@ export async function createInstallmentPurchase(
       description: `${purchase.description} (${i + 1}/${purchase.installmentCount})`,
       amount: -Math.abs(perInstallment),
       category: purchase.category,
-      payment_method: purchase.creditCardId ? "card" : "boleto",
       status: isFuture ? "pending" : (isFirstMonth ? "paid" : "pending"),
       is_recurring: false,
       transaction_date: txDateStr,
@@ -87,9 +87,12 @@ export async function createInstallmentPurchase(
     });
   }
 
+  // Sanitize transactions to ensure no extra fields (e.g., payment_method) are included
+  const sanitizedTransactions = transactions.map(tx => sanitizeTransactionForInsert(tx));
+  
   const { error: txError } = await supabase
     .from("transactions")
-    .insert(transactions);
+    .insert(sanitizedTransactions);
 
   if (txError) throw txError;
 

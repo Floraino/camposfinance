@@ -4,7 +4,9 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { type CategoryType, categoryConfig } from "@/components/ui/CategoryBadge";
+import { CategoryBadge } from "@/components/ui/CategoryBadge";
+import { getCategoryOptionsForPicker, getCategoryDisplay } from "@/lib/categoryResolvers";
+import { useHouseholdCategories } from "@/hooks/useHouseholdCategories";
 import { 
   Sheet,
   SheetContent,
@@ -51,22 +53,24 @@ export function UncategorizedCard({
   progressMessage,
 }: UncategorizedCardProps) {
   const { toast } = useToast();
+  const { categories: customCategories } = useHouseholdCategories(householdId);
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
   const [showRuleSheet, setShowRuleSheet] = useState(false);
-  const [selectedCategory, setSelectedCategory] = useState<CategoryType>("other");
+  const [selectedCategory, setSelectedCategory] = useState<string>("other");
   const [rulePattern, setRulePattern] = useState("");
   const [isSaving, setIsSaving] = useState(false);
 
-  const handleQuickCategorize = async (tx: Transaction, category: CategoryType) => {
+  const handleQuickCategorize = async (tx: Transaction, category: string) => {
     try {
       await updateTransaction(tx.id, householdId, { category });
       try {
         const fp = merchantFingerprint(tx.description);
         if (fp) await setCache(householdId, fp, category, 1.0);
       } catch (_) { /* cache opcional */ }
+      const display = getCategoryDisplay(category, customCategories);
       toast({
         title: "Categorizado!",
-        description: `${tx.description} → ${categoryConfig[category].label}`,
+        description: `${tx.description} → ${display.label}`,
       });
       onRefresh();
     } catch (error) {
@@ -121,13 +125,8 @@ export function UncategorizedCard({
     }).format(Math.abs(value));
   };
 
-  const categories = Object.entries(categoryConfig)
-    .filter(([key]) => key !== "other")
-    .map(([key, config]) => ({
-      value: key as CategoryType,
-      label: config.label,
-      Icon: config.icon,
-    }));
+  const categoryOptions = getCategoryOptionsForPicker(customCategories);
+  const categoriesForSelect = categoryOptions.filter((o) => o.value !== "other");
 
   return (
     <>
@@ -171,18 +170,15 @@ export function UncategorizedCard({
                 </div>
                 <div className="flex items-center gap-2">
                   <Select
-                    onValueChange={(value) => handleQuickCategorize(tx, value as CategoryType)}
+                    onValueChange={(value) => handleQuickCategorize(tx, value)}
                   >
                     <SelectTrigger className="w-[140px] h-8 text-xs">
                       <SelectValue placeholder="Categorizar" />
                     </SelectTrigger>
                     <SelectContent>
-                      {categories.map((cat) => (
-                        <SelectItem key={cat.value} value={cat.value}>
-                          <div className="flex items-center gap-2">
-                            <cat.Icon className="w-4 h-4" />
-                            <span>{cat.label}</span>
-                          </div>
+                      {categoryOptions.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          <span>{opt.label}</span>
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -270,20 +266,18 @@ export function UncategorizedCard({
 
             <div className="space-y-2">
               <Label>Categoria</Label>
-              <div className="grid grid-cols-3 gap-2">
-                {categories.map((cat) => (
+              <div className="flex flex-wrap gap-2">
+                {categoriesForSelect.map((opt) => (
                   <button
-                    key={cat.value}
-                    onClick={() => setSelectedCategory(cat.value)}
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setSelectedCategory(opt.value)}
                     className={cn(
-                      "p-3 rounded-xl border-2 text-center transition-all",
-                      selectedCategory === cat.value
-                        ? "border-primary bg-primary/10"
-                        : "border-border hover:border-primary/50"
+                      "transition-all rounded-full",
+                      selectedCategory === opt.value && "ring-2 ring-primary ring-offset-2 ring-offset-background"
                     )}
                   >
-                    <cat.Icon className="w-6 h-6 mb-1 mx-auto" />
-                    <span className="text-xs font-medium">{cat.label}</span>
+                    <CategoryBadge category={opt.value} size="sm" customCategories={customCategories} />
                   </button>
                 ))}
               </div>

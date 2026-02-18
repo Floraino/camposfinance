@@ -2,7 +2,8 @@ import { useState, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { X, Trash2, Loader2, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { CategoryBadge, categoryConfig, type CategoryType } from "@/components/ui/CategoryBadge";
+import { CategoryPicker } from "@/components/ui/CategoryPicker";
+import { useHouseholdCategories } from "@/hooks/useHouseholdCategories";
 import { cn } from "@/lib/utils";
 import { type Transaction, type NewTransaction, updateTransaction, deleteTransaction } from "@/services/transactionService";
 import { merchantFingerprint } from "@/services/categorizationEngine";
@@ -30,19 +31,12 @@ interface EditTransactionSheetProps {
   householdId: string;
 }
 
-const paymentMethods = [
-  { id: "pix", label: "PIX" },
-  { id: "boleto", label: "Boleto" },
-  { id: "card", label: "Cartão" },
-  { id: "cash", label: "Dinheiro" },
-] as const;
 
 export function EditTransactionSheet({ isOpen, transaction, onClose, onUpdate, householdId }: EditTransactionSheetProps) {
   const queryClient = useQueryClient();
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
-  const [category, setCategory] = useState<CategoryType>("other");
-  const [paymentMethod, setPaymentMethod] = useState<"pix" | "boleto" | "card" | "cash">("pix");
+  const [category, setCategory] = useState<string>("other");
   const [status, setStatus] = useState<"paid" | "pending">("paid");
   const [isRecurring, setIsRecurring] = useState(false);
   const [transactionDate, setTransactionDate] = useState("");
@@ -58,13 +52,13 @@ export function EditTransactionSheet({ isOpen, transaction, onClose, onUpdate, h
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
   const { toast } = useToast();
+  const { categories: customCategories, createCategory } = useHouseholdCategories(householdId);
 
   useEffect(() => {
     if (isOpen && transaction) {
       setDescription(transaction.description);
       setAmount(Math.abs(transaction.amount).toString().replace(".", ","));
       setCategory(transaction.category);
-      setPaymentMethod(transaction.payment_method);
       setStatus(transaction.status);
       setIsRecurring(transaction.is_recurring);
       setTransactionDate(transaction.transaction_date);
@@ -110,14 +104,13 @@ export function EditTransactionSheet({ isOpen, transaction, onClose, onUpdate, h
         description,
         amount: -Math.abs(parseFloat(amount.replace(",", "."))),
         category,
-        payment_method: paymentMethod,
         status,
         is_recurring: isRecurring,
         transaction_date: transactionDate,
         due_date: status === "pending" ? (dueDate || null) : null,
         member_id: memberId,
         account_id: selectedAccountId ?? null,
-        credit_card_id: paymentMethod === "card" ? (selectedCardId ?? null) : null,
+        credit_card_id: selectedCardId ?? null,
       });
       try {
         const fp = merchantFingerprint(description);
@@ -261,46 +254,20 @@ export function EditTransactionSheet({ isOpen, transaction, onClose, onUpdate, h
               <label className="text-sm font-medium text-muted-foreground mb-3 block">
                 Categoria
               </label>
-              <div className="flex flex-wrap gap-2">
-                {(Object.keys(categoryConfig) as CategoryType[]).map((cat) => (
-                  <button
-                    key={cat}
-                    onClick={() => setCategory(cat)}
-                    className={cn(
-                      "transition-all duration-200",
-                      category === cat && "ring-2 ring-primary ring-offset-2 ring-offset-card rounded-full"
-                    )}
-                  >
-                    <CategoryBadge category={cat} size="md" />
-                  </button>
-                ))}
-              </div>
-            </div>
-            
-            {/* Payment Method */}
-            <div>
-              <label className="text-sm font-medium text-muted-foreground mb-3 block">
-                Forma de Pagamento
-              </label>
-              <div className="grid grid-cols-4 gap-2">
-                {paymentMethods.map((method) => (
-                  <button
-                    key={method.id}
-                    onClick={() => {
-                      setPaymentMethod(method.id);
-                      if (method.id !== "card") setSelectedCardId(undefined);
-                    }}
-                    className={cn(
-                      "h-12 rounded-xl border-2 text-sm font-medium transition-all duration-200",
-                      paymentMethod === method.id
-                        ? "border-primary bg-primary/10 text-primary"
-                        : "border-border bg-muted/50 text-muted-foreground hover:border-primary/50"
-                    )}
-                  >
-                    {method.label}
-                  </button>
-                ))}
-              </div>
+              <CategoryPicker
+                value={category}
+                onChange={setCategory}
+                customCategories={customCategories}
+                onAddCustom={async (name, color) => {
+                  try {
+                    return await createCategory({ name, color: color ?? null });
+                  } catch (e) {
+                    toast({ title: "Erro", description: e instanceof Error ? e.message : "Não foi possível criar categoria", variant: "destructive" });
+                    return null;
+                  }
+                }}
+                size="md"
+              />
             </div>
 
             {/* Account Selection — show current and allow change */}
@@ -339,8 +306,8 @@ export function EditTransactionSheet({ isOpen, transaction, onClose, onUpdate, h
               </div>
             )}
 
-            {/* Credit Card — show when payment = card and there are cards available */}
-            {paymentMethod === "card" && cards.length > 0 && (
+            {/* Credit Card — show when there are cards available */}
+            {cards.length > 0 && (
               <div>
                 <label className="text-sm font-medium text-muted-foreground mb-3 block">
                   💳 Cartão

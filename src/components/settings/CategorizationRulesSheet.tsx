@@ -3,7 +3,10 @@ import { X, Plus, Trash2, Loader2, Edit2, Check, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { CategoryBadge, categoryConfig, type CategoryType } from "@/components/ui/CategoryBadge";
+import { CategoryBadge } from "@/components/ui/CategoryBadge";
+import { CategoryPicker } from "@/components/ui/CategoryPicker";
+import { useHouseholdCategories } from "@/hooks/useHouseholdCategories";
+import { getCategoryOptionsForPicker } from "@/lib/categoryResolvers";
 import { 
   Select,
   SelectContent,
@@ -39,7 +42,8 @@ export function CategorizationRulesSheet({ isOpen, onClose, householdId }: Categ
   // Form state
   const [pattern, setPattern] = useState("");
   const [matchType, setMatchType] = useState<"contains" | "starts_with" | "exact">("contains");
-  const [category, setCategory] = useState<CategoryType>("other");
+  const [category, setCategory] = useState<string>("other");
+  const { categories: customCategories, createCategory } = useHouseholdCategories(householdId);
 
   useEffect(() => {
     if (isOpen && householdId) {
@@ -199,20 +203,14 @@ export function CategorizationRulesSheet({ isOpen, onClose, householdId }: Categ
 
               <div>
                 <Label>Categoria</Label>
-                <div className="flex flex-wrap gap-2 mt-2">
-                  {(Object.keys(categoryConfig) as CategoryType[]).map((cat) => (
-                    <button
-                      key={cat}
-                      onClick={() => setCategory(cat)}
-                      className={cn(
-                        "transition-all duration-200",
-                        category === cat && "ring-2 ring-primary ring-offset-2 ring-offset-card rounded-full"
-                      )}
-                    >
-                      <CategoryBadge category={cat} size="sm" />
-                    </button>
-                  ))}
-                </div>
+                <CategoryPicker
+                  value={category}
+                  onChange={setCategory}
+                  customCategories={customCategories}
+                  onAddCustom={async (name, color) => createCategory({ name, color })}
+                  size="sm"
+                  className="mt-2"
+                />
               </div>
 
               <div className="flex gap-2">
@@ -284,7 +282,7 @@ export function CategorizationRulesSheet({ isOpen, onClose, householdId }: Categ
                       </span>
                     </div>
                     <div className="flex items-center gap-2">
-                      <CategoryBadge category={rule.category} size="sm" />
+                      <CategoryBadge category={rule.category} size="sm" customCategories={customCategories} />
                       {rule.times_applied > 0 && (
                         <span className="text-xs text-muted-foreground">
                           {rule.times_applied}x usada

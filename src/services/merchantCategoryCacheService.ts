@@ -1,15 +1,13 @@
 import { supabase } from "@/integrations/supabase/client";
-import type { CategoryType } from "@/components/ui/CategoryBadge";
 
 /**
  * Cache: fingerprint -> category por household.
- * Usado pelo motor de categorização (evita IA quando já sabemos).
+ * category pode ser fixa (bills, food, ...) ou custom (custom:<uuid>).
  */
-
 export async function getCacheByFingerprints(
   householdId: string,
   fingerprints: string[]
-): Promise<Map<string, CategoryType>> {
+): Promise<Map<string, string>> {
   if (!householdId || fingerprints.length === 0) return new Map();
   const unique = [...new Set(fingerprints)];
 
@@ -24,11 +22,9 @@ export async function getCacheByFingerprints(
     return new Map();
   }
 
-  const map = new Map<string, CategoryType>();
+  const map = new Map<string, string>();
   for (const row of data || []) {
-    if (row.category && ["bills", "food", "leisure", "shopping", "transport", "health", "education", "other"].includes(row.category)) {
-      map.set(row.fingerprint, row.category as CategoryType);
-    }
+    if (row.category) map.set(row.fingerprint, row.category);
   }
   return map;
 }
@@ -36,7 +32,7 @@ export async function getCacheByFingerprints(
 export async function setCache(
   householdId: string,
   fingerprint: string,
-  category: CategoryType,
+  category: string,
   confidence: number = 1.0
 ): Promise<void> {
   if (!householdId || !fingerprint) return;
@@ -61,7 +57,7 @@ export async function setCache(
 
 export async function setCacheBatch(
   householdId: string,
-  entries: Array<{ fingerprint: string; category: CategoryType; confidence?: number }>
+  entries: Array<{ fingerprint: string; category: string; confidence?: number }>
 ): Promise<void> {
   if (!householdId || entries.length === 0) return;
   const now = new Date().toISOString();

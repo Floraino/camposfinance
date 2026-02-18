@@ -1,0 +1,42 @@
+# Aplica migrations do Supabase automaticamente quando houver alterações em supabase/migrations/
+#
+# Secrets obrigatórios no repositório (Settings → Secrets and variables → Actions):
+#   - SUPABASE_ACCESS_TOKEN: token de acesso em https://supabase.com/dashboard/account/tokens
+#   - SUPABASE_DB_PASSWORD: senha do banco (a que você definiu ao criar o projeto)
+# Opcional: SUPABASE_PROJECT_REF (se não definir, usa project_id do supabase/config.toml)
+
+name: Supabase migrations
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/migrations/**'
+  workflow_dispatch:
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Link project
+        run: |
+          REF="${{ secrets.SUPABASE_PROJECT_REF }}"
+          if [ -z "$REF" ]; then
+            REF=$(grep 'project_id' supabase/config.toml | cut -d'"' -f2)
+          fi
+          npx supabase link --project-ref "$REF"
+
+      - name: Push migrations
+        run: npx supabase db push
+        continue-on-error: false

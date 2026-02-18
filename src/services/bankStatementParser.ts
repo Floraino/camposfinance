@@ -152,42 +152,131 @@ async function readFileAsText(file: File): Promise<string> {
   return text;
 }
 
+/** Detecta se .xls é na verdade HTML (comum em extratos Itaú/Santander). Exportado para testes. */
+export function detectXlsFormat(buffer: ArrayBuffer): "html" | "biff" {
+  const bytes = new Uint8Array(buffer);
+  const len = Math.min(bytes.length, 512);
+  let text = "";
+  const utf8 = new TextDecoder("utf-8", { fatal: false });
+  text = utf8.decode(bytes.slice(0, len));
+  if (text.includes("\uFFFD")) {
+    text = new TextDecoder("iso-8859-1").decode(bytes.slice(0, len));
+  }
+  const lower = text.toLowerCase().trim();
+  if (lower.startsWith("<html") || lower.startsWith("<!doctype") || (lower.includes("<table") && lower.includes("</"))) {
+    return "html";
+  }
+  return "biff";
+}
+
 /**
- * Converte XLS/XLSX para matriz 2D usando SheetJS (xlsx)
+ * Converte XLS/XLSX para matriz 2D usando SheetJS (xlsx).
+ * Para .xls: tenta HTML primeiro (extratos Itaú/Santander muitas vezes são HTML), depois BIFF.
+ * Preserves Date objects and numbers for better parsing.
  */
-async function parseXlsToMatrix(buffer: ArrayBuffer): Promise<string[][]> {
+async function parseXlsToMatrix(buffer: ArrayBuffer, fileFormat?: SupportedFormat): Promise<(string | number | Date)[][]> {
   const XLSX = await import("xlsx");
-  const workbook = XLSX.read(buffer, { type: "array", raw: true });
+  let workbook: import("xlsx").WorkBook;
+
+  if (fileFormat === "xls") {
+    const kind = detectXlsFormat(buffer);
+    if (typeof process !== "undefined" && process.env?.NODE_ENV === "development") {
+      console.log("[BankStatementParser] .xls detectado:", kind);
+    }
+    if (kind === "html") {
+      const decoder = new TextDecoder("utf-8", { fatal: false });
+      let html = decoder.decode(buffer);
+      if (html.includes("\uFFFD")) {
+        html = new TextDecoder("iso-8859-1").decode(buffer);
+      }
+      workbook = XLSX.read(html, { type: "string", raw: false, cellDates: true });
+    } else {
+      workbook = XLSX.read(buffer, { type: "array", raw: false, cellDates: true });
+    }
+  } else {
+    workbook = XLSX.read(buffer, { type: "array", raw: false, cellDates: true });
+  }
+
   const firstSheetName = workbook.SheetNames[0];
   if (!firstSheetName) throw new Error("Planilha vazia");
   const sheet = workbook.Sheets[firstSheetName];
   const json = XLSX.utils.sheet_to_json(sheet, {
     header: 1,
     defval: "",
-    raw: true,
+    raw: false,
     blankrows: true,
+    cellDates: true,
   });
   const matrix = (json as unknown[]).map((row) =>
-    (Array.isArray(row) ? row : [row]).map((c) => String(c ?? "").trim())
+    (Array.isArray(row) ? row : [row]).map((c) => {
+      if (c instanceof Date) return c;
+      if (typeof c === "number") return c;
+      return String(c ?? "").trim();
+    })
   );
   return matrix;
 }
 
 /**
  * Converte XLS/XLSX para string CSV-like usando SheetJS (xlsx)
+ * Tries to preserve dates and numbers by converting them to formatted strings
  */
 async function parseXlsToCsv(buffer: ArrayBuffer): Promise<string> {
   const XLSX = await import("xlsx");
-  const workbook = XLSX.read(buffer, { type: "array", raw: true });
+  // Use cellDates: true to get Date objects, raw: false to get formatted values
+  const workbook = XLSX.read(buffer, { type: "array", raw: false, cellDates: true });
   const firstSheetName = workbook.SheetNames[0];
   if (!firstSheetName) throw new Error("Planilha vazia");
   const sheet = workbook.Sheets[firstSheetName];
-  const csv = XLSX.utils.sheet_to_csv(sheet, {
-    FS: ";",
-    RS: "\n",
+  
+  // Convert sheet to JSON with dates preserved
+  const json = XLSX.utils.sheet_to_json(sheet, {
+    header: 1,
+    defval: "",
+    raw: false, // false = convert dates/numbers to Date/Number objects
     blankrows: false,
-    raw: true,
+    cellDates: true,
   });
+  
+  // Convert to CSV string, handling Date objects and numbers
+  const rows = (json as unknown[]).map((row) => {
+    if (!Array.isArray(row)) return [String(row ?? "")];
+    return row.map((cell) => {
+      if (cell instanceof Date) {
+        // Format Date as DD/MM/YYYY (Brazilian format)
+        const day = String(cell.getDate()).padStart(2, "0");
+        const month = String(cell.getMonth() + 1).padStart(2, "0");
+        const year = cell.getFullYear();
+        return `${day}/${month}/${year}`;
+      }
+      if (typeof cell === "number") {
+        // Check if it's likely a date serial (Excel dates are often > 1 and < 100000)
+        // More lenient: allow small decimals (time component) and check if it's in date range
+        if (cell > 1 && cell < 100000) {
+          // Check if it's an integer or has small decimal (time component)
+          const isInteger = cell % 1 === 0;
+          const hasSmallDecimal = cell % 1 < 0.01;
+          if (isInteger || hasSmallDecimal) {
+            // Might be Excel date serial - try to convert
+            const excelEpoch = new Date(1899, 11, 30);
+            const date = new Date(excelEpoch.getTime() + Math.round(cell) * 86400000);
+            if (!isNaN(date.getTime()) && date.getFullYear() >= 1900 && date.getFullYear() <= 2100) {
+              const day = String(date.getDate()).padStart(2, "0");
+              const month = String(date.getMonth() + 1).padStart(2, "0");
+              const year = date.getFullYear();
+              return `${day}/${month}/${year}`;
+            }
+          }
+        }
+        // Regular number - format as Brazilian format
+        return cell.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      }
+      return String(cell ?? "").trim();
+    });
+  });
+  
+  // Convert to CSV string
+  const csv = rows.map((row) => row.join(";")).join("\n");
   return csv.trim();
 }
 
@@ -232,16 +321,64 @@ export async function parseFileToCsvContent(
       typeof file.arrayBuffer === "function"
         ? await file.arrayBuffer()
         : await new Response(file as Blob).arrayBuffer();
-    const matrix = await parseXlsToMatrix(buffer);
-    if (matrix.length === 0) throw new Error("Planilha vazia ou sem dados.");
 
-    const extract: ExtractResult = extractImportableTable(matrix);
+    // Try table extraction first (converts mixed types to strings). Para .xls detecta HTML vs BIFF.
+    const matrix = await parseXlsToMatrix(buffer, format);
+    if (matrix.length === 0) throw new Error("Planilha vazia ou sem dados.");
+    
+    // Convert mixed-type matrix to string[][] for table extraction
+    const stringMatrix: string[][] = matrix.map((row) =>
+      row.map((cell) => {
+        if (cell instanceof Date) {
+          // Format Date as DD/MM/YYYY
+          const day = String(cell.getDate()).padStart(2, "0");
+          const month = String(cell.getMonth() + 1).padStart(2, "0");
+          const year = cell.getFullYear();
+          return `${day}/${month}/${year}`;
+        }
+        if (typeof cell === "number") {
+          // Check if it's likely an Excel date serial
+          // More lenient: allow small decimals (time component) and check if it's in date range
+          if (cell > 1 && cell < 100000) {
+            // Check if it's an integer or has small decimal (time component)
+            const isInteger = cell % 1 === 0;
+            const hasSmallDecimal = cell % 1 < 0.01;
+            if (isInteger || hasSmallDecimal) {
+              const excelEpoch = new Date(1899, 11, 30);
+              const date = new Date(excelEpoch.getTime() + Math.round(cell) * 86400000);
+              if (!isNaN(date.getTime()) && date.getFullYear() >= 1900 && date.getFullYear() <= 2100) {
+                const day = String(date.getDate()).padStart(2, "0");
+                const month = String(date.getMonth() + 1).padStart(2, "0");
+                const year = date.getFullYear();
+                return `${day}/${month}/${year}`;
+              }
+            }
+          }
+          // Regular number - format as Brazilian format
+          return cell.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+        return String(cell ?? "").trim();
+      })
+    );
+
+    const extract: ExtractResult = extractImportableTable(stringMatrix);
     if (extract.success && extract.table && extract.table.rows.length > 0) {
+      if (typeof process !== "undefined" && process.env?.NODE_ENV === "development") {
+        const t = extract.table;
+        console.log("[BankStatementParser] XLS/XLSX extraído:", {
+          headerRowIndex: t.headerRowIndex,
+          columns: t.columns,
+          rowCount: t.rows.length,
+          primeirasLinhas: t.rows.slice(0, 5).map((r) => ({ cells: r })),
+        });
+      }
       const content = matrixToCsvString(extract.table.matrix);
       if (content) {
         return { content, format, extracted: true };
       }
     }
+    
+    // Fallback: convert entire sheet to CSV (with proper date/number formatting)
     const content = await parseXlsToCsv(buffer);
     if (!content) throw new Error("Planilha vazia ou sem dados.");
     return { content, format };

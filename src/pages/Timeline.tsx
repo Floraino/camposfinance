@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { MobileLayout } from "@/components/layout/MobileLayout";
 import { useHousehold } from "@/hooks/useHousehold";
+import { useHouseholdCategories } from "@/hooks/useHouseholdCategories";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -20,13 +21,6 @@ import {
 import { cn } from "@/lib/utils";
 import { DateRangePicker, getCurrentMonthRange, type DateRange } from "@/components/ui/DateRangePicker";
 
-const PAYMENT_FILTERS = [
-  { id: "all", label: "Todos" },
-  { id: "pix", label: "Pix" },
-  { id: "card", label: "Cartão" },
-  { id: "boleto", label: "Boleto" },
-  { id: "cash", label: "Dinheiro" },
-] as const;
 
 const STATUS_FILTERS = [
   { id: "all", label: "Todos" },
@@ -45,9 +39,9 @@ export default function Timeline() {
   const navigate = useNavigate();
   const { currentHousehold, isLoading: householdLoading } = useHousehold();
   const { toast } = useToast();
+  const { categories: customCategories } = useHouseholdCategories(currentHousehold?.id);
 
   const [dateRange, setDateRange] = useState<DateRange>(getCurrentMonthRange);
-  const [paymentFilter, setPaymentFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [result, setResult] = useState<TimelineResult | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -57,16 +51,13 @@ export default function Timeline() {
     if (currentHousehold?.id) {
       loadTimeline();
     }
-  }, [currentHousehold?.id, dateRange.from, dateRange.to, paymentFilter, statusFilter]);
+  }, [currentHousehold?.id, dateRange.from, dateRange.to, statusFilter]);
 
   const loadTimeline = async () => {
     if (!currentHousehold?.id) return;
     setIsLoading(true);
     try {
       const filters: TimelineFilters = { from: dateRange.from, to: dateRange.to };
-      if (paymentFilter !== "all") {
-        filters.paymentMethod = paymentFilter as TimelineFilters["paymentMethod"];
-      }
       if (statusFilter !== "all") {
         filters.status = statusFilter as TimelineFilters["status"];
       }
@@ -131,24 +122,6 @@ export default function Timeline() {
             </div>
           </div>
         )}
-
-        {/* Payment Method Filter */}
-        <div className="flex gap-2 overflow-x-auto pb-2 mb-2 scrollbar-hide">
-          {PAYMENT_FILTERS.map((f) => (
-            <button
-              key={f.id}
-              onClick={() => setPaymentFilter(f.id)}
-              className={cn(
-                "px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border transition-all",
-                paymentFilter === f.id
-                  ? "bg-primary text-primary-foreground border-primary"
-                  : "bg-muted/50 text-muted-foreground border-border hover:border-primary/50"
-              )}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
 
         {/* Status Filter */}
         <div className="flex gap-2 overflow-x-auto pb-3 mb-4 scrollbar-hide">
@@ -215,12 +188,12 @@ export default function Timeline() {
                         amount: tx.amount,
                         date: tx.transaction_date,
                         category: tx.category,
-                        paymentMethod: tx.payment_method,
                         status: tx.status,
                         isRecurring: tx.is_recurring,
                         memberName: tx.member_name,
                       }}
                       onClick={() => handleTxClick(tx)}
+                      customCategories={customCategories}
                     />
                   ))}
                 </div>
@@ -241,7 +214,6 @@ export default function Timeline() {
             description: editingTx.description,
             amount: editingTx.amount,
             category: editingTx.category,
-            payment_method: editingTx.payment_method,
             status: editingTx.status,
             is_recurring: editingTx.is_recurring,
             transaction_date: editingTx.transaction_date,

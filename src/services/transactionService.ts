@@ -1,5 +1,6 @@
 import { supabase } from "@/integrations/supabase/client";
 import type { CategoryType } from "@/components/ui/CategoryBadge";
+import { sanitizeTransactionForInsert } from "./transactionSanitizer";
 
 export interface Transaction {
   id: string;
@@ -7,8 +8,8 @@ export interface Transaction {
   household_id: string;
   description: string;
   amount: number;
-  category: CategoryType;
-  payment_method: "pix" | "boleto" | "card" | "cash";
+  /** Categoria fixa ou custom (custom:<uuid>) */
+  category: string;
   status: "paid" | "pending";
   is_recurring: boolean;
   transaction_date: string;
@@ -24,11 +25,13 @@ export interface Transaction {
   updated_at: string;
 }
 
+/** Categoria: fixa (bills, food, ...) ou custom (custom:<uuid>) */
+export type CategoryValue = CategoryType | string;
+
 export interface NewTransaction {
   description: string;
   amount: number;
-  category: CategoryType;
-  payment_method: "pix" | "boleto" | "card" | "cash";
+  category: CategoryValue;
   status: "paid" | "pending";
   is_recurring: boolean;
   transaction_date?: string;
@@ -60,8 +63,7 @@ export async function getTransactions(householdId: string): Promise<Transaction[
   
   return (data || []).map(tx => ({
     ...tx,
-    category: tx.category as CategoryType,
-    payment_method: tx.payment_method as "pix" | "boleto" | "card" | "cash",
+    category: tx.category as string,
     status: tx.status as "paid" | "pending",
     member_name: (tx.family_members as { name: string } | null)?.name,
   }));
@@ -76,24 +78,28 @@ export async function addTransaction(householdId: string, transaction: NewTransa
   
   if (!user) throw new Error("Usuário não autenticado");
 
+  const insertData = {
+    user_id: user.id,
+    household_id: householdId,
+    description: transaction.description,
+    amount: transaction.amount,
+    category: transaction.category,
+    status: transaction.status,
+    is_recurring: transaction.is_recurring,
+    transaction_date: transaction.transaction_date || new Date().toISOString().split("T")[0],
+    due_date: transaction.due_date || null,
+    notes: transaction.notes,
+    member_id: transaction.member_id,
+    account_id: transaction.account_id || null,
+    credit_card_id: transaction.credit_card_id || null,
+  };
+  
+  // Sanitize to ensure no extra fields (e.g., payment_method) are included
+  const sanitizedData = sanitizeTransactionForInsert(insertData);
+  
   const { data, error } = await supabase
     .from("transactions")
-    .insert({
-      user_id: user.id,
-      household_id: householdId,
-      description: transaction.description,
-      amount: transaction.amount,
-      category: transaction.category,
-      payment_method: transaction.payment_method,
-      status: transaction.status,
-      is_recurring: transaction.is_recurring,
-      transaction_date: transaction.transaction_date || new Date().toISOString().split("T")[0],
-      due_date: transaction.due_date || null,
-      notes: transaction.notes,
-      member_id: transaction.member_id,
-      account_id: transaction.account_id || null,
-      credit_card_id: transaction.credit_card_id || null,
-    })
+    .insert(sanitizedData)
     .select(`
       *,
       family_members (
@@ -106,8 +112,7 @@ export async function addTransaction(householdId: string, transaction: NewTransa
 
   return {
     ...data,
-    category: data.category as CategoryType,
-    payment_method: data.payment_method as "pix" | "boleto" | "card" | "cash",
+    category: data.category as string,
     status: data.status as "paid" | "pending",
     member_name: (data.family_members as { name: string } | null)?.name,
   };
@@ -130,8 +135,7 @@ export async function updateTransaction(id: string, householdId: string, updates
 
   return {
     ...data,
-    category: data.category as CategoryType,
-    payment_method: data.payment_method as "pix" | "boleto" | "card" | "cash",
+    category: data.category as string,
     status: data.status as "paid" | "pending",
   };
 }
@@ -169,6 +173,30 @@ export async function deleteTransactionsBulk(ids: string[], householdId: string)
 
   if (error) throw error;
   return data?.length ?? 0;
+}
+
+/** Bulk update category for multiple transactions. Modo Seguro: só aplica após confirmação do usuário. */
+export async function updateTransactionsCategory(
+  householdId: string,
+  updates: Array<{ id: string; category: CategoryType }>
+): Promise<{ updated: number; failed: Array<{ id: string; reason: string }> }> {
+  if (!householdId) {
+    throw new Error("householdId é obrigatório");
+  }
+  if (!updates.length) {
+    return { updated: 0, failed: [] };
+  }
+  const failed: Array<{ id: string; reason: string }> = [];
+  let updated = 0;
+  for (const { id, category } of updates) {
+    try {
+      await updateTransaction(id, householdId, { category });
+      updated++;
+    } catch (e) {
+      failed.push({ id, reason: e instanceof Error ? e.message : "Erro desconhecido" });
+    }
+  }
+  return { updated, failed };
 }
 
 export async function getMonthlyStats(
@@ -216,10 +244,10 @@ export async function getMonthlyStats(
   const byCategory = transactions
     .filter(t => t.amount < 0)
     .reduce((acc, t) => {
-      const cat = t.category as CategoryType;
+      const cat = t.category ?? "other";
       acc[cat] = (acc[cat] || 0) + Math.abs(t.amount);
       return acc;
-    }, {} as Record<CategoryType, number>);
+    }, {} as Record<string, number>);
 
   return {
     totalExpenses,

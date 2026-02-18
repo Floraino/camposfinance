@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { X, Upload, FileSpreadsheet, Loader2, CheckCircle, AlertCircle, ChevronRight, Download, RefreshCw, MinusCircle, ArrowDownCircle, Wand2, FileDown, FileCheck } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,7 @@ import {
   parseStandardCSV,
   convertBankStatement,
   downloadConvertedCSV,
+  ensureCreditCardDateMapping,
   type CSVAnalysis,
   type ColumnMapping,
   type ParsedRow,
@@ -41,6 +42,8 @@ import {
 } from "@/services/inferInstitutionFromFilename";
 import { getHouseholdAccounts, type Account } from "@/services/householdService";
 import { getCreditCards, type CreditCard } from "@/services/creditCardService";
+import { useHouseholdCategories } from "@/hooks/useHouseholdCategories";
+import { getCategoryOptionsForPicker } from "@/lib/categoryResolvers";
 
 interface ImportCSVSheetProps {
   isOpen: boolean;
@@ -49,8 +52,7 @@ interface ImportCSVSheetProps {
 }
 
 type ImportStep = "upload" | "mapping" | "preview" | "importing" | "result" | "convert-preview";
-type ImportMode = "standard" | "convert";
-type DefaultPaymentMethod = "pix" | "card" | "boleto" | "cash";
+type ImportMode = "standard" | "convert" | "credit_card";
 
 const INTERNAL_FIELDS = [
   { value: "description", label: "Descrição" },
@@ -61,7 +63,6 @@ const INTERNAL_FIELDS = [
   { value: "debito", label: "Débito (R$)" },
   { value: "date", label: "Data" },
   { value: "category", label: "Categoria" },
-  { value: "payment_method", label: "Forma de Pagamento" },
   { value: "notes", label: "Observações" },
   { value: "ignore", label: "Ignorar" },
 ];
@@ -97,9 +98,11 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
   const [inferredMatch, setInferredMatch] = useState<InstitutionMatchResult | null>(null);
   const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(undefined);
   const [selectedCardId, setSelectedCardId] = useState<string | undefined>(undefined);
-  const [defaultPaymentMethod, setDefaultPaymentMethod] = useState<DefaultPaymentMethod>("pix");
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [cards, setCards] = useState<CreditCard[]>([]);
+  const [defaultImportCategory, setDefaultImportCategory] = useState<string>("");
+
+  const { categories: customCategories } = useHouseholdCategories(currentHousehold?.id);
 
   const resetState = useCallback(() => {
     setStep("upload");
@@ -115,10 +118,17 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
     setInferredMatch(null);
     setSelectedAccountId(undefined);
     setSelectedCardId(undefined);
-    setDefaultPaymentMethod("pix");
     setAccounts([]);
     setCards([]);
+    setDefaultImportCategory("");
   }, []);
+
+  // Load cards when mode is credit_card
+  useEffect(() => {
+    if (mode === "credit_card" && currentHousehold?.id && cards.length === 0) {
+      getCreditCards(currentHousehold.id).then(setCards).catch(console.error);
+    }
+  }, [mode, currentHousehold?.id, cards.length]);
 
   const handleClose = useCallback(() => {
     resetState();
@@ -180,11 +190,6 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
             setCards(cardList);
             const match = matchInstitutionToHousehold(inferred, accs, cardList);
             setInferredMatch(match);
-            if (inferred?.kind === "card") {
-              setDefaultPaymentMethod("card");
-            } else {
-              setDefaultPaymentMethod("pix");
-            }
             if (match.confidence === "high") {
               if (match.accountId) setSelectedAccountId(match.accountId);
               if (match.cardId) setSelectedCardId(match.cardId);
@@ -212,11 +217,30 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
         const result = await convertBankStatement(content);
         setConversionResult(result);
         setStep("convert-preview");
+      } else if (importMode === "credit_card") {
+        // Credit card import mode - same flow as standard but will require card selection
+        if (isStandardFormat(content)) {
+          // Skip AI analysis, parse directly (credit_card: positivos = gasto, negativos descartados)
+          const parsed = parseStandardCSV(content, "credit_card");
+          setParsedRows(parsed);
+          setStep("preview");
+        } else {
+          const analysisResult = await analyzeCSV(content);
+          setAnalysis(analysisResult);
+          const mappingsWithDate = ensureCreditCardDateMapping(
+            content,
+            analysisResult.columnMappings,
+            analysisResult.separator,
+            analysisResult.hasHeader
+          );
+          setColumnMappings(mappingsWithDate);
+          setStep("mapping");
+        }
       } else {
         // Standard mode - check if it's already in standard format
         if (isStandardFormat(content)) {
           // Skip AI analysis, parse directly
-          const parsed = parseStandardCSV(content);
+          const parsed = parseStandardCSV(content, "bank_account");
           setParsedRows(parsed);
           setStep("preview");
           toast({
@@ -225,7 +249,27 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
           });
         } else {
           // Analyze CSV with AI
-          const result = await analyzeCSV(content);
+          let result = await analyzeCSV(content);
+          // Normalize analysis for conta corrente: Edge (or fallback) may omit amount or set hasHeader false
+          const firstLine = content.split(/\r?\n/).filter(l => l.trim())[0] ?? "";
+          const sep = result.separator;
+          const firstRowCells = firstLine.split(sep).map(c => c.trim().replace(/^["']|["']$/g, ""));
+          const firstCellLower = firstRowCells[0]?.toLowerCase() ?? "";
+          const looksLikeHeader = /^data$|^date$|^dia$|^dt$/.test(firstCellLower) || firstRowCells.some(c => /^(data|descri|valor|hist|lan[cç]amento)/i.test(c?.trim() ?? ""));
+          let hasHeader = result.hasHeader;
+          if (!hasHeader && looksLikeHeader) hasHeader = true;
+          let columnMappingsResult = result.columnMappings;
+          const hasAmountMapping = columnMappingsResult.some(m => m.internalField === "amount" || m.internalField === "debito" || m.internalField === "credito");
+          if (!hasAmountMapping && firstRowCells.length > 0) {
+            const valorColIdx = firstRowCells.findIndex(c => /valor\s*\(?\s*r?\$?\)?|amount|valor\s*\(/i.test((c ?? "").trim()));
+            if (valorColIdx >= 0) {
+              columnMappingsResult = [
+                ...columnMappingsResult.filter(m => m.internalField !== "amount"),
+                { csvColumn: firstRowCells[valorColIdx] || `Coluna ${valorColIdx + 1}`, csvIndex: valorColIdx, internalField: "amount" as const, confidence: 0.9 },
+              ];
+            }
+          }
+          result = { ...result, hasHeader, columnMappings: columnMappingsResult };
           setAnalysis(result);
           setColumnMappings(result.columnMappings);
           setStep("mapping");
@@ -261,7 +305,6 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
           amount: -Math.abs(c.valor),
           type: "EXPENSE",
           category: c.categoria as any,
-          payment_method: c.forma_pagamento as any,
           status: "paid" as const,
           transaction_date: c.data,
           import_hash: `${c.data}|${c.valor}|${c.descricao}`.substring(0, 50),
@@ -313,13 +356,16 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
 
     setIsLoading(true);
     try {
+      const sourceType = mode === "credit_card" ? "credit_card" : "bank_account";
       const parsed = parseCSVWithMappings(
         csvContent,
         columnMappings,
         analysis.separator,
         analysis.hasHeader,
         analysis.dateFormat,
-        analysis.hasEntradaSaida
+        analysis.hasEntradaSaida,
+        sourceType,
+        defaultImportCategory || undefined
       );
       setParsedRows(parsed);
       setStep("preview");
@@ -348,6 +394,19 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
       return;
     }
 
+    // Validate credit card selection for credit_card mode
+    if (mode === "credit_card") {
+      const creditCardId = selectedCardId ?? (inferredMatch?.confidence === "high" && inferredMatch?.cardId ? inferredMatch.cardId : undefined);
+      if (!creditCardId) {
+        toast({
+          title: "Cartão obrigatório",
+          description: "Selecione um cartão de crédito para importar o extrato",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
     setStep("importing");
     setImportProgress(10);
 
@@ -357,20 +416,26 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
         setImportProgress(prev => Math.min(prev + 10, 90));
       }, 200);
 
-      const accountId =
-        selectedAccountId ??
-        (inferredMatch?.confidence === "high" && inferredMatch?.accountId
-          ? inferredMatch.accountId
-          : undefined);
-      const creditCardId =
-        defaultPaymentMethod === "card"
-          ? (selectedCardId ?? (inferredMatch?.confidence === "high" && inferredMatch?.cardId ? inferredMatch.cardId : undefined))
-          : null;
+      // Determine sourceType based on mode
+      const sourceType = mode === "credit_card" ? "credit_card" : "bank_account";
+      
+      // For credit_card mode: credit_card_id is required, account_id must be null
+      // For bank_account mode: account_id is optional, credit_card_id should be null
+      const accountId = mode === "credit_card" 
+        ? null 
+        : (selectedAccountId ??
+          (inferredMatch?.confidence === "high" && inferredMatch?.accountId
+            ? inferredMatch.accountId
+            : undefined));
+      const creditCardId = mode === "credit_card"
+        ? (selectedCardId ?? (inferredMatch?.confidence === "high" && inferredMatch?.cardId ? inferredMatch.cardId : undefined))
+        : null;
+      
       const importOptions: ImportTransactionsOptions = {
         originalFilename: originalFilename ?? undefined,
         accountId: accountId ?? null,
         creditCardId: creditCardId ?? null,
-        defaultPaymentMethod,
+        sourceType: sourceType,
       };
 
       const result = await importTransactions(
@@ -390,11 +455,13 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
           queryClient.invalidateQueries({ queryKey: ["accounts", currentHousehold.id] });
         }
         const linkedMsg =
-          accountId && accounts.find((a) => a.id === accountId)
-            ? ` Vinculadas à conta ${accounts.find((a) => a.id === accountId)?.name}.`
-            : creditCardId && cards.find((c) => c.id === creditCardId)
-              ? ` Vinculadas ao cartão ${cards.find((c) => c.id === creditCardId)?.name}.`
-              : "";
+          mode === "credit_card" && creditCardId && cards.find((c) => c.id === creditCardId)
+            ? ` Vinculadas ao cartão ${cards.find((c) => c.id === creditCardId)?.name}.`
+            : mode !== "credit_card" && accountId && accounts.find((a) => a.id === accountId)
+              ? ` Vinculadas à conta ${accounts.find((a) => a.id === accountId)?.name}.`
+              : mode !== "credit_card" && creditCardId && cards.find((c) => c.id === creditCardId)
+                ? ` Vinculadas ao cartão ${cards.find((c) => c.id === creditCardId)?.name}.`
+                : "";
         toast({
           title: "Importação concluída!",
           description: `${result.imported} transações importadas com sucesso.${linkedMsg}`,
@@ -434,6 +501,9 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
   const ignoredIncomeCount = parsedRows.filter(
     r => r.status === "SKIPPED" && r.reason?.includes("Entrada ignorada")
   ).length;
+  const ignoredNegativeCount = parsedRows.filter(
+    r => r.status === "SKIPPED" && r.reason?.includes("Valor negativo descartado")
+  ).length;
 
   // Get available columns from CSV
   const csvHeaders = analysis?.sampleRows[0]?._raw?.split(analysis.separator).map((h, i) => ({
@@ -456,7 +526,9 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
           
             <div className="flex items-center justify-between px-4 pb-4 border-b border-border">
             <div className="flex items-center gap-2">
-              <h2 className="text-xl font-bold text-foreground">Importar Extrato</h2>
+              <h2 className="text-xl font-bold text-foreground">
+                {mode === "credit_card" ? "Importar Extrato (Cartão de Crédito)" : "Importar Extrato"}
+              </h2>
               <ProBadge show={!isPro} />
             </div>
             <Button variant="ghost" size="icon-sm" onClick={handleClose}>
@@ -472,7 +544,7 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
               </span>
               <ChevronRight className="w-4 h-4 text-muted-foreground" />
               <span className={step === "mapping" || step === "convert-preview" ? "text-primary font-medium" : "text-muted-foreground"}>
-                2. {mode === "convert" ? "Conversão" : "Mapeamento"}
+                2. {mode === "convert" ? "Conversão" : mode === "credit_card" ? "Mapeamento (Cartão)" : "Mapeamento"}
               </span>
               <ChevronRight className="w-4 h-4 text-muted-foreground" />
               <span className={step === "preview" ? "text-primary font-medium" : "text-muted-foreground"}>
@@ -498,17 +570,23 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                       <p className="text-sm text-muted-foreground mb-2">
                         Baixe o modelo padrão do app para preencher suas transações de forma estruturada.
                       </p>
-                      <Button variant="outline" size="sm" onClick={() => downloadCSVTemplate()}>
-                        <Download className="w-4 h-4 mr-2" />
-                        Baixar Modelo CSV
-                      </Button>
+                      <div className="flex gap-2">
+                        <Button variant="outline" size="sm" onClick={() => downloadCSVTemplate("bank_account")}>
+                          <Download className="w-4 h-4 mr-2" />
+                          Modelo Conta Corrente
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={() => downloadCSVTemplate("credit_card")}>
+                          <Download className="w-4 h-4 mr-2" />
+                          Modelo Cartão de Crédito
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 </div>
 
-                {/* Two import options */}
+                {/* Three import options */}
                 <div className="grid gap-3">
-                  {/* Standard Import */}
+                  {/* Standard Import - Bank Account */}
                   <button
                     onClick={() => {
                       setMode("standard");
@@ -531,9 +609,41 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                           <FileSpreadsheet className="w-6 h-6 text-primary" />
                         </div>
                         <div>
-                          <p className="font-medium text-foreground">Importar Extrato</p>
+                          <p className="font-medium text-foreground">Importar Extrato (Conta Corrente)</p>
                           <p className="text-sm text-muted-foreground">
                             CSV, TXT, XLS ou XLSX — extrato de banco
+                          </p>
+                        </div>
+                      </>
+                    )}
+                  </button>
+
+                  {/* Credit Card Import */}
+                  <button
+                    onClick={() => {
+                      setMode("credit_card");
+                      fileInputRef.current?.click();
+                    }}
+                    disabled={isLoading}
+                    className="w-full border-2 border-dashed border-purple-500/50 rounded-xl p-6 flex items-center gap-4 hover:border-purple-500 transition-colors disabled:opacity-50 text-left bg-purple-500/5"
+                  >
+                    {isLoading && mode === "credit_card" ? (
+                      <>
+                        <Loader2 className="w-10 h-10 text-purple-500 animate-spin flex-shrink-0" />
+                        <div>
+                          <p className="font-medium text-foreground">Analisando extrato...</p>
+                          <p className="text-sm text-muted-foreground">Detectando formato automaticamente</p>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="w-12 h-12 rounded-full bg-purple-500/20 flex items-center justify-center flex-shrink-0">
+                          <FileSpreadsheet className="w-6 h-6 text-purple-500" />
+                        </div>
+                        <div>
+                          <p className="font-medium text-foreground">Importar Extrato (Cartão de Crédito)</p>
+                          <p className="text-sm text-muted-foreground">
+                            CSV, TXT, XLS ou XLSX — fatura de cartão
                           </p>
                         </div>
                       </>
@@ -811,6 +921,33 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                   </div>
                 </div>
 
+                <div className="glass-card p-4">
+                  <h4 className="font-semibold text-foreground mb-2">Categoria padrão</h4>
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Usada quando a coluna Categoria não está mapeada ou o valor está vazio.
+                  </p>
+                  <Select value={defaultImportCategory || "infer"} onValueChange={(v) => setDefaultImportCategory(v === "infer" ? "" : v)}>
+                    <SelectTrigger className="w-full max-w-[240px]">
+                      <SelectValue placeholder="Inferir pela descrição" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="infer">Inferir pela descrição</SelectItem>
+                      {getCategoryOptionsForPicker(customCategories).map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {mode === "credit_card" && !columnMappings.some(m => m.internalField === "date") && (
+                  <div className="flex items-center gap-2 rounded-lg border border-amber-500/50 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">
+                    <AlertCircle className="h-5 w-5 flex-shrink-0" />
+                    <span>Selecione a coluna de <strong>Data</strong> no mapeamento para continuar (ou use a detecção automática).</span>
+                  </div>
+                )}
+
                 <div className="flex gap-3">
                   <Button variant="outline" onClick={() => setStep("upload")} className="flex-1">
                     Voltar
@@ -819,7 +956,11 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                     variant="accent" 
                     onClick={handleContinueToPreview} 
                     className="flex-1"
-                    disabled={isLoading || !columnMappings.some(m => ["amount", "entrada", "saida", "credito", "debito"].includes(m.internalField))}
+                    disabled={
+                      isLoading ||
+                      !columnMappings.some(m => ["amount", "entrada", "saida", "credito", "debito"].includes(m.internalField)) ||
+                      (mode === "credit_card" && !columnMappings.some(m => m.internalField === "date"))
+                    }
                   >
                     {isLoading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
                     Continuar
@@ -853,10 +994,14 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                       <ArrowDownCircle className="w-4 h-4" />
                       <span>{expenseCount} despesas</span>
                     </div>
-                    {ignoredIncomeCount > 0 && (
+                    {(mode === "credit_card" ? ignoredNegativeCount : ignoredIncomeCount) > 0 && (
                       <div className="flex items-center gap-1 text-muted-foreground">
                         <MinusCircle className="w-4 h-4" />
-                        <span>Ignorados (entradas): {ignoredIncomeCount}</span>
+                        <span>
+                          {mode === "credit_card"
+                            ? `Ignorados (valores negativos): ${ignoredNegativeCount}`
+                            : `Ignorados (entradas): ${ignoredIncomeCount}`}
+                        </span>
                       </div>
                     )}
                   </div>
@@ -873,39 +1018,17 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                   </label>
                 </div>
 
-                {/* Método de lançamento (aplicado a todas as linhas importadas) */}
-                <div className="glass-card p-4 space-y-3">
-                  <h3 className="text-sm font-semibold text-foreground">Método de lançamento</h3>
-                  <p className="text-xs text-muted-foreground">
-                    Forma de pagamento aplicada a todas as transações deste import.
-                  </p>
-                  <div>
-                    <label className="text-xs text-muted-foreground mb-1 block">Forma de pagamento</label>
-                    <Select
-                      value={defaultPaymentMethod}
-                      onValueChange={(v) => {
-                        const method = v as DefaultPaymentMethod;
-                        setDefaultPaymentMethod(method);
-                        if (method !== "card") setSelectedCardId(undefined);
-                      }}
-                    >
-                      <SelectTrigger className="w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="pix">Pix</SelectItem>
-                        <SelectItem value="card">Cartão</SelectItem>
-                        <SelectItem value="boleto">Boleto</SelectItem>
-                        <SelectItem value="cash">Dinheiro</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                {/* Inferred account/card from filename */}
-                {(inferredMatch?.matchedName || accounts.length > 0 || cards.length > 0) && (
+                {/* Account/Card selection: sempre em modo cartão; em outros modos, só se houver conta/cartão ou inferência */}
+                {(mode === "credit_card" || !!(inferredMatch?.matchedName || accounts.length > 0 || cards.length > 0)) && (
                   <div className="glass-card p-4 space-y-3">
-                    <h3 className="text-sm font-semibold text-foreground">Vincular a conta/cartão</h3>
+                    <h3 className="text-sm font-semibold text-foreground">
+                      {mode === "credit_card" ? "Vincular ao cartão de crédito" : "Vincular a conta/cartão"}
+                    </h3>
+                    {mode === "credit_card" && (
+                      <p className="text-xs text-muted-foreground">
+                        Selecione o cartão de crédito ao qual este extrato pertence. Todas as transações serão vinculadas a este cartão.
+                      </p>
+                    )}
                     {inferredMatch?.confidence === "high" && inferredMatch.matchedName && (
                       <p className="text-xs text-muted-foreground">
                         Detectado pelo arquivo: <span className="font-medium text-foreground">{inferredMatch.matchedName}</span>
@@ -916,7 +1039,32 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                         Várias opções possíveis: {inferredMatch.matchedName}. Escolha abaixo se quiser.
                       </p>
                     )}
-                    {accounts.length > 0 && (
+                    {mode === "credit_card" && (
+                      <div>
+                        <label className="text-xs text-muted-foreground mb-1 block">
+                          Cartão de Crédito <span className="text-destructive">*</span>
+                        </label>
+                        {cards.length === 0 ? (
+                          <p className="text-xs text-muted-foreground">Carregando cartões...</p>
+                        ) : (
+                          <Select
+                            value={selectedCardId ?? ""}
+                            onValueChange={(v) => setSelectedCardId(v || undefined)}
+                            required
+                          >
+                            <SelectTrigger className="w-full">
+                              <SelectValue placeholder="Selecione um cartão" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {cards.map((c) => (
+                                <SelectItem key={c.id} value={c.id}>{c.name}{c.last_four ? ` •${c.last_four}` : ""}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                      </div>
+                    )}
+                    {mode !== "credit_card" && accounts.length > 0 && (
                       <div>
                         <label className="text-xs text-muted-foreground mb-1 block">Conta / Banco</label>
                         <Select
@@ -935,7 +1083,7 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                         </Select>
                       </div>
                     )}
-                    {defaultPaymentMethod === "card" && cards.length > 0 && (
+                    {mode !== "credit_card" && cards.length > 0 && (
                       <div>
                         <label className="text-xs text-muted-foreground mb-1 block">Cartão (opcional)</label>
                         <Select
@@ -1143,9 +1291,11 @@ export function ImportCSVSheet({ isOpen, onClose, onImportComplete }: ImportCSVS
                   </div>
                 </div>
 
-                {ignoredIncomeCount > 0 && (
+                {(mode === "credit_card" ? ignoredNegativeCount : ignoredIncomeCount) > 0 && (
                   <p className="text-sm text-muted-foreground text-center">
-                    Ignorados (entradas): {ignoredIncomeCount}
+                    {mode === "credit_card"
+                      ? `Ignorados (valores negativos): ${ignoredNegativeCount}`
+                      : `Ignorados (entradas): ${ignoredIncomeCount}`}
                   </p>
                 )}
 

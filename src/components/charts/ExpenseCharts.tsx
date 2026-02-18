@@ -1,39 +1,33 @@
 import { useMemo } from "react";
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
-import { CategoryType, categoryConfig } from "@/components/ui/CategoryBadge";
+import { getCategoryDisplay, getCategoryChartColor } from "@/lib/categoryResolvers";
+import type { HouseholdCategory } from "@/services/householdCategoriesService";
 
 interface ExpenseData {
-  category: CategoryType;
+  category: string;
   amount: number;
 }
 
-const categoryColors: Record<CategoryType, string> = {
-  bills: "hsl(195, 50%, 35%)",
-  food: "hsl(35, 60%, 50%)",
-  leisure: "hsl(280, 40%, 50%)",
-  shopping: "hsl(330, 50%, 50%)",
-  transport: "hsl(200, 60%, 45%)",
-  health: "hsl(0, 50%, 55%)",
-  education: "hsl(170, 50%, 40%)",
-  other: "hsl(220, 15%, 45%)",
-};
-
 interface ExpensePieChartProps {
   data: ExpenseData[];
+  customCategories?: HouseholdCategory[];
   className?: string;
 }
 
-export function ExpensePieChart({ data, className }: ExpensePieChartProps) {
+export function ExpensePieChart({ data, customCategories, className }: ExpensePieChartProps) {
   const total = useMemo(() => data.reduce((acc, item) => acc + item.amount, 0), [data]);
 
   const chartData = useMemo(() => 
-    data.map((item) => ({
-      name: categoryConfig[item.category].label,
-      value: item.amount,
-      color: categoryColors[item.category],
-      percentage: ((item.amount / total) * 100).toFixed(1),
-    })),
-    [data, total]
+    data.map((item) => {
+      const display = getCategoryDisplay(item.category, customCategories);
+      return {
+        name: display.label,
+        value: item.amount,
+        color: getCategoryChartColor(item.category, customCategories),
+        percentage: total > 0 ? ((item.amount / total) * 100).toFixed(1) : "0",
+      };
+    }),
+    [data, total, customCategories]
   );
 
   return (

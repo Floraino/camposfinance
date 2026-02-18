@@ -11,7 +11,6 @@ interface ExtractedReceipt {
   amount: number;
   date: string;
   category: string;
-  paymentMethod: string;
   items: Array<{ name: string; quantity: number; price: number }>;
   establishment: string;
   confidence: number;
@@ -26,13 +25,13 @@ serve(async (req) => {
     const traceId = crypto.randomUUID().slice(0, 8);
     console.log(`[scan-receipt][${traceId}] Request received`);
 
-    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
-    if (!GEMINI_API_KEY) {
-      console.error(`[scan-receipt][${traceId}] GEMINI_API_KEY not configured`);
+    const MANUS_API_KEY = Deno.env.get("MANUS_API_KEY");
+    if (!MANUS_API_KEY) {
+      console.error(`[scan-receipt][${traceId}] MANUS_API_KEY not configured`);
       return new Response(JSON.stringify({ 
         error: "Serviço de IA não configurado",
         code: "AI_NOT_CONFIGURED",
-        details: "GEMINI_API_KEY não está definida nos secrets do Supabase. Configure em: Dashboard → Edge Functions → Secrets." 
+        details: "MANUS_API_KEY não está definida nos secrets do Supabase. Configure em: Dashboard → Edge Functions → Secrets." 
       }), {
         status: 503,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -170,7 +169,6 @@ Analise a imagem e extraia as seguintes informações:
 2. **amount**: Valor total em reais (número, sem R$)
 3. **date**: Data da compra no formato YYYY-MM-DD
 4. **category**: Categoria mais apropriada entre: food, transport, leisure, health, education, shopping, bills, other
-5. **paymentMethod**: Método de pagamento entre: pix, boleto, card, cash
 6. **items**: Lista de itens comprados (se visível), cada um com name, quantity e price
 7. **establishment**: Nome completo do estabelecimento
 8. **confidence**: Confiança na extração de 0 a 1 (1 = muito confiante)
@@ -179,7 +177,6 @@ REGRAS IMPORTANTES:
 - Se não conseguir identificar algum campo, use valores padrão sensatos
 - Para category, use "food" para supermercados/restaurantes, "shopping" para lojas, "bills" para contas, etc.
 - Se a data não for visível, use a data de hoje: ${new Date().toISOString().split('T')[0]}
-- Se o método de pagamento não for claro, use "card"
 - O amount deve ser sempre positivo
 - Retorne APENAS o JSON, sem explicações adicionais
 
@@ -189,7 +186,6 @@ Exemplo de resposta:
   "amount": 156.78,
   "date": "2025-02-03",
   "category": "food",
-  "paymentMethod": "card",
   "items": [
     {"name": "Arroz 5kg", "quantity": 1, "price": 25.90},
     {"name": "Feijão 1kg", "quantity": 2, "price": 8.50}
@@ -198,97 +194,49 @@ Exemplo de resposta:
   "confidence": 0.95
 }`;
 
-    console.log(`[scan-receipt][${traceId}] Calling Gemini Vision API...`);
+    console.log(`[scan-receipt][${traceId}] Calling Manus Vision API...`);
     const aiStartTime = Date.now();
 
-    // Call Gemini Vision API directly
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-    
-    const geminiBody = {
-      contents: [{
-        role: "user",
-        parts: [
-          {
-            inlineData: {
-              mimeType: mimeType || "image/jpeg",
-              data: imageBase64,
-            },
-          },
-          {
-            text: "Extraia os dados deste cupom/nota fiscal e retorne APENAS o JSON com os dados.",
-          },
-        ],
-      }],
-      systemInstruction: { parts: [{ text: systemPrompt }] },
-      generationConfig: {
+    try {
+      // Use Manus AI provider for vision
+      const { generateFromImage } = await import("../_shared/manusProvider.ts");
+      const result = await generateFromImage({
+        prompt: "Extraia os dados deste cupom/nota fiscal e retorne APENAS o JSON com os dados.",
+        imageBase64,
+        mimeType: mimeType || "image/jpeg",
+        systemInstruction: systemPrompt,
         temperature: 0.1,
-        maxOutputTokens: 4096,
-      },
-    };
+        maxTokens: 4096,
+      });
 
-    const response = await fetch(geminiUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(geminiBody),
-    });
+      const aiDuration = Date.now() - aiStartTime;
+      console.log(`[scan-receipt][${traceId}] Manus response: duration=${aiDuration}ms`);
 
-    const aiDuration = Date.now() - aiStartTime;
-    console.log(`[scan-receipt][${traceId}] Gemini response: status=${response.status}, duration=${aiDuration}ms`);
+      const content = result.text || "";
 
-    if (!response.ok) {
-      if (response.status === 429) {
-        return new Response(JSON.stringify({ error: "Muitas requisições. Por favor, aguarde um momento.", code: "RATE_LIMITED" }), {
-          status: 429,
+      if (!content) {
+        return new Response(JSON.stringify({ error: "Não foi possível extrair dados da imagem" }), {
+          status: 422,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      if (response.status === 403) {
-        return new Response(JSON.stringify({ error: "GEMINI_API_KEY inválida ou sem permissão.", code: "INVALID_API_KEY" }), {
-          status: 403,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      const errorText = await response.text();
-      console.error(`[scan-receipt][${traceId}] Gemini error: ${response.status} ${errorText.substring(0, 300)}`);
-      return new Response(JSON.stringify({ 
-        error: "Erro ao processar imagem", 
-        code: "AI_ERROR",
-        details: `Gemini retornou status ${response.status}` 
-      }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
 
-    const geminiData = await response.json();
-    const content = geminiData.candidates?.[0]?.content?.parts
-      ?.map((p: any) => p.text)
-      .filter(Boolean)
-      .join("") || "";
-
-    if (!content) {
-      return new Response(JSON.stringify({ error: "Não foi possível extrair dados da imagem" }), {
-        status: 422,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // Parse the JSON response from AI
+      // Parse the JSON response from AI
     let extractedData: ExtractedReceipt;
     try {
       // Remove markdown code blocks if present
       const jsonStr = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
       extractedData = JSON.parse(jsonStr);
-    } catch (parseError) {
-      console.error("Failed to parse AI response:", content);
-      return new Response(JSON.stringify({ 
-        error: "Não foi possível interpretar os dados do cupom",
-        rawContent: content 
-      }), {
-        status: 422,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+      } catch (parseError) {
+        console.error("Failed to parse AI response:", content);
+        return new Response(JSON.stringify({ 
+          error: "Não foi possível interpretar os dados do cupom",
+          rawContent: content 
+        }), {
+          status: 422,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
 
     // Validate and sanitize the extracted data
     const sanitizedData: ExtractedReceipt = {
@@ -298,19 +246,41 @@ Exemplo de resposta:
       category: ["food", "transport", "leisure", "health", "education", "shopping", "bills", "other"].includes(extractedData.category) 
         ? extractedData.category 
         : "other",
-      paymentMethod: ["pix", "boleto", "card", "cash"].includes(extractedData.paymentMethod) 
-        ? extractedData.paymentMethod 
-        : "card",
       items: Array.isArray(extractedData.items) ? extractedData.items : [],
       establishment: extractedData.establishment || extractedData.description || "Estabelecimento",
       confidence: Math.min(1, Math.max(0, Number(extractedData.confidence) || 0.5)),
     };
 
-    console.log(`[scan-receipt][${traceId}] Success: description="${sanitizedData.description}", amount=${sanitizedData.amount}, confidence=${sanitizedData.confidence}`);
+      console.log(`[scan-receipt][${traceId}] Success: description="${sanitizedData.description}", amount=${sanitizedData.amount}, confidence=${sanitizedData.confidence}`);
 
-    return new Response(JSON.stringify(sanitizedData), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+      return new Response(JSON.stringify(sanitizedData), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    } catch (aiError) {
+      const aiDuration = Date.now() - aiStartTime;
+      console.error(`[scan-receipt][${traceId}] Manus error:`, aiError);
+      
+      if (aiError instanceof Error && aiError.message.includes("RATE_LIMITED")) {
+        return new Response(JSON.stringify({ error: "Muitas requisições. Por favor, aguarde um momento.", code: "RATE_LIMITED" }), {
+          status: 429,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      if (aiError instanceof Error && aiError.message.includes("INVALID_API_KEY")) {
+        return new Response(JSON.stringify({ error: "MANUS_API_KEY inválida ou sem permissão.", code: "INVALID_API_KEY" }), {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ 
+        error: "Erro ao processar imagem", 
+        code: "AI_ERROR",
+        details: aiError instanceof Error ? aiError.message : "Erro desconhecido"
+      }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
   } catch (e) {
     console.error("[scan-receipt] Unhandled error:", e);
     return new Response(JSON.stringify({ 

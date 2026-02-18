@@ -14,7 +14,6 @@ export interface TimelineFilters {
   month?: string; // YYYY-MM (legacy, still supported)
   from?: string;  // YYYY-MM-DD (preferred when present)
   to?: string;    // YYYY-MM-DD (preferred when present)
-  paymentMethod?: "pix" | "boleto" | "card" | "cash";
   status?: "paid" | "pending";
   category?: string;
 }
@@ -70,9 +69,6 @@ export async function getTimeline(
     .order("transaction_date", { ascending: false });
 
   // Apply optional filters
-  if (filters.paymentMethod) {
-    query = query.eq("payment_method", filters.paymentMethod);
-  }
   if (filters.status) {
     query = query.eq("status", filters.status);
   }
@@ -90,7 +86,6 @@ export async function getTimeline(
   const transactions: Transaction[] = (data || []).map((tx: any) => ({
     ...tx,
     category: tx.category as CategoryType,
-    payment_method: tx.payment_method as Transaction["payment_method"],
     status: tx.status as Transaction["status"],
     member_name: tx.family_members?.name || undefined,
   }));

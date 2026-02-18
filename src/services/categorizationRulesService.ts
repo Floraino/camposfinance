@@ -1,5 +1,7 @@
 import { supabase } from "@/integrations/supabase/client";
-import type { CategoryType } from "@/components/ui/CategoryBadge";
+
+/** Categoria fixa (bills, food, ...) ou custom (custom:<uuid>). */
+export type RuleCategory = string;
 
 export interface CategorizationRule {
   id: string;
@@ -7,7 +9,7 @@ export interface CategorizationRule {
   created_by: string;
   pattern: string;
   match_type: "contains" | "starts_with" | "exact";
-  category: CategoryType;
+  category: RuleCategory;
   account_id: string | null;
   priority: number;
   is_active: boolean;
@@ -19,7 +21,7 @@ export interface CategorizationRule {
 export interface NewCategorizationRule {
   pattern: string;
   match_type?: "contains" | "starts_with" | "exact";
-  category: CategoryType;
+  category: RuleCategory;
   account_id?: string;
   priority?: number;
 }
@@ -40,7 +42,7 @@ export async function getCategorizationRules(householdId: string): Promise<Categ
   return (data || []).map(rule => ({
     ...rule,
     match_type: rule.match_type as "contains" | "starts_with" | "exact",
-    category: rule.category as CategoryType,
+    category: rule.category as RuleCategory,
   }));
 }
 
@@ -74,7 +76,7 @@ export async function createCategorizationRule(
   return {
     ...data,
     match_type: data.match_type as "contains" | "starts_with" | "exact",
-    category: data.category as CategoryType,
+    category: data.category as RuleCategory,
   };
 }
 
@@ -103,7 +105,7 @@ export async function updateCategorizationRule(
   return {
     ...data,
     match_type: data.match_type as "contains" | "starts_with" | "exact",
-    category: data.category as CategoryType,
+    category: data.category as RuleCategory,
   };
 }
 
@@ -125,7 +127,7 @@ export async function deleteCategorizationRule(ruleId: string, householdId: stri
 export async function applyCategorizationRules(
   householdId: string,
   description: string
-): Promise<{ category: CategoryType | null; accountId: string | null; ruleId: string | null }> {
+): Promise<{ category: RuleCategory | null; accountId: string | null; ruleId: string | null }> {
   if (!householdId || !description) {
     return { category: null, accountId: null, ruleId: null };
   }
@@ -148,7 +150,7 @@ export async function applyCategorizationRules(
       void supabase.rpc("increment_rule_usage", { _rule_id: result.rule_id });
     }
     return {
-      category: result.category as CategoryType,
+      category: result.category as RuleCategory,
       accountId: result.account_id,
       ruleId: result.rule_id,
     };
@@ -163,7 +165,7 @@ export async function applyCategorizationRules(
  */
 export async function suggestRules(householdId: string): Promise<Array<{
   pattern: string;
-  suggestedCategory: CategoryType;
+  suggestedCategory: RuleCategory;
   occurrences: number;
 }>> {
   if (!householdId) return [];
@@ -182,7 +184,7 @@ export async function suggestRules(householdId: string): Promise<Array<{
   const existingPatterns = new Set(existingRules.map((r) => r.pattern.toLowerCase()));
 
   // Build frequency map of description keywords -> category
-  const keywordCategoryMap = new Map<string, { category: CategoryType; count: number }>();
+  const keywordCategoryMap = new Map<string, { category: RuleCategory; count: number }>();
 
   for (const tx of categorized || []) {
     const words = tx.description.toLowerCase().split(/\s+/).filter((w: string) => w.length >= 4);
@@ -194,7 +196,7 @@ export async function suggestRules(householdId: string): Promise<Array<{
           entry.count++;
         }
       } else {
-        keywordCategoryMap.set(word, { category: tx.category as CategoryType, count: 1 });
+        keywordCategoryMap.set(word, { category: (tx.category ?? "other") as RuleCategory, count: 1 });
       }
     }
   }
@@ -217,7 +219,7 @@ export async function suggestRules(householdId: string): Promise<Array<{
 export async function learnFromCorrection(
   householdId: string,
   description: string,
-  category: CategoryType,
+  category: RuleCategory,
   accountId?: string
 ): Promise<void> {
   // Extract significant keywords from description

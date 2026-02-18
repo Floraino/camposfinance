@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { X, Camera, Image as ImageIcon, ChevronRight, Loader2, User, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { CategoryBadge, categoryConfig, type CategoryType } from "@/components/ui/CategoryBadge";
+import { CategoryPicker } from "@/components/ui/CategoryPicker";
+import { useHouseholdCategories } from "@/hooks/useHouseholdCategories";
 import { cn } from "@/lib/utils";
 import { type NewTransaction } from "@/services/transactionService";
 import { createInstallmentPurchase } from "@/services/installmentService";
@@ -22,18 +23,11 @@ interface AddTransactionSheetProps {
   householdId: string;
 }
 
-const paymentMethods = [
-  { id: "pix", label: "PIX" },
-  { id: "boleto", label: "Boleto" },
-  { id: "card", label: "Cartão" },
-  { id: "cash", label: "Dinheiro" },
-] as const;
 
 export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: AddTransactionSheetProps) {
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
-  const [category, setCategory] = useState<CategoryType>("other");
-  const [paymentMethod, setPaymentMethod] = useState<"pix" | "boleto" | "card" | "cash">("pix");
+  const [category, setCategory] = useState<string>("other");
   const [status, setStatus] = useState<"paid" | "pending">("paid");
   const [dueDate, setDueDate] = useState<string>("");
   const [isInstallment, setIsInstallment] = useState(false);
@@ -56,6 +50,7 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
   const categorizationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { toast } = useToast();
   const { allowed: canUseOCR } = useProFeature("OCR_SCAN");
+  const { categories: customCategories, createCategory } = useHouseholdCategories(householdId);
 
   useEffect(() => {
     if (isOpen && householdId) {
@@ -128,10 +123,6 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
     };
   }, [description, manualCategorySet, householdId, accounts]);
 
-  const handleCategorySelect = (cat: CategoryType) => {
-    setCategory(cat);
-    setManualCategorySet(true);
-  };
 
   const loadFamilyMembers = async () => {
     if (!householdId) return;
@@ -240,7 +231,6 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
       setDescription(data.description || data.establishment || "");
       setAmount(data.amount?.toString().replace(".", ",") || "");
       setCategory(data.category as CategoryType || "other");
-      setPaymentMethod(data.paymentMethod as "pix" | "boleto" | "card" | "cash" || "card");
       
       toast({
         title: "Dados extraídos!",
@@ -268,10 +258,6 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
 
   const handleSubmit = async () => {
     if (!description || !amount) return;
-    if (paymentMethod === "card" && creditCards.length > 0 && !selectedCardId) {
-      toast({ title: "Selecione um cartão", variant: "destructive" });
-      return;
-    }
 
     const parsedAmount = Math.abs(parseFloat(amount.replace(",", ".")));
 
@@ -300,13 +286,12 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
         description,
         amount: -parsedAmount,
         category,
-        payment_method: paymentMethod,
         status,
         is_recurring: false,
         member_id: memberId,
         ...(dueDate ? { due_date: dueDate } : {}),
         account_id: selectedAccountId || null,
-        credit_card_id: paymentMethod === "card" ? (selectedCardId || null) : null,
+        credit_card_id: selectedCardId || null,
       });
     }
 
@@ -314,7 +299,6 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
     setDescription("");
     setAmount("");
     setCategory("other");
-    setPaymentMethod("pix");
     setStatus("paid");
     setIsInstallment(false);
     setInstallmentCount("2");
@@ -477,43 +461,20 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
                 </span>
               )}
             </label>
-            <div className="flex flex-wrap gap-2">
-              {(Object.keys(categoryConfig) as CategoryType[]).map((cat) => (
-                <button
-                  key={cat}
-                  onClick={() => handleCategorySelect(cat)}
-                  className={cn(
-                    "transition-all duration-200",
-                    category === cat && "ring-2 ring-primary ring-offset-2 ring-offset-card rounded-full"
-                  )}
-                >
-                  <CategoryBadge category={cat} size="md" />
-                </button>
-              ))}
-            </div>
-          </div>
-          
-          {/* Payment Method */}
-          <div>
-            <label className="text-sm font-medium text-muted-foreground mb-3 block">
-              Forma de Pagamento
-            </label>
-            <div className="grid grid-cols-4 gap-2">
-              {paymentMethods.map((method) => (
-                <button
-                  key={method.id}
-                  onClick={() => setPaymentMethod(method.id)}
-                  className={cn(
-                    "h-12 rounded-xl border-2 text-sm font-medium transition-all duration-200",
-                    paymentMethod === method.id
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border bg-muted/50 text-muted-foreground hover:border-primary/50"
-                  )}
-                >
-                  {method.label}
-                </button>
-              ))}
-            </div>
+            <CategoryPicker
+              value={category}
+              onChange={(cat) => { setCategory(cat); setManualCategorySet(true); }}
+              customCategories={customCategories}
+              onAddCustom={async (name, color) => {
+                try {
+                  return await createCategory({ name, color: color ?? null });
+                } catch (e) {
+                  toast({ title: "Erro", description: e instanceof Error ? e.message : "Não foi possível criar categoria", variant: "destructive" });
+                  return null;
+                }
+              }}
+              size="md"
+            />
           </div>
           
           {/* Account Selection — only when accounts exist */}
@@ -552,8 +513,8 @@ export function AddTransactionSheet({ isOpen, onClose, onAdd, householdId }: Add
             </div>
           )}
 
-          {/* Credit Card Selection — only when payment = card AND cards exist */}
-          {paymentMethod === "card" && creditCards.length > 0 && (
+          {/* Credit Card Selection — only when cards exist */}
+          {creditCards.length > 0 && (
             <div>
               <label className="text-sm font-medium text-muted-foreground mb-3 block">
                 💳 Cartão

@@ -1,12 +1,12 @@
 # CamposFinance
 
-App de finanças por família com IA integrada (Google Gemini).
+App de finanças por família com IA integrada (Manus AI).
 
 ## Tecnologias
 
 - **Frontend**: Vite + React + TypeScript + Tailwind CSS + shadcn-ui
 - **Backend**: Supabase (Auth, Database, Edge Functions)
-- **IA**: Google Gemini API (OCR, categorização, análise CSV, chat)
+- **IA**: Manus AI API (OCR, categorização, análise CSV, chat)
 
 ## Setup local
 
@@ -37,16 +37,16 @@ npm run dev
 ### Backend (Supabase Edge Functions Secrets)
 | Variável | Descrição |
 |---|---|
-| `GEMINI_API_KEY` | Chave da API Google Gemini (obter em https://aistudio.google.com/apikey) |
+| `MANUS_API_KEY` | Chave da API Manus AI (obter em https://manus.ai - Dashboard → API Integration) |
 | `STRIPE_SECRET_KEY` | Chave secreta Stripe (pagamentos) |
 | `STRIPE_WEBHOOK_SECRET` | Secret do webhook Stripe |
 
 ## Features com IA
 
-- **OCR de recibos**: Upload de imagem → Gemini Vision → extração de dados
-- **Importação CSV**: Parsing + Gemini para mapeamento de colunas inteligente
-- **Categorização**: Keywords local + Gemini como fallback para descrições desconhecidas
-- **Clara (chat)**: Assistente financeira com Gemini
+- **OCR de recibos**: Upload de imagem → Manus Vision → extração de dados
+- **Importação CSV**: Parsing + Manus para mapeamento de colunas inteligente
+- **Categorização**: Keywords local + Manus como fallback para descrições desconhecidas
+- **Clara (chat)**: Assistente financeira com Manus AI
 
 ### Como ativar "Categorizar com IA"
 
@@ -58,10 +58,10 @@ Se aparecer **"IA indisponível"** ou **"parte sem IA"** ao categorizar transaç
    supabase link --project-ref SEU_PROJECT_REF
    supabase functions deploy categorize-transaction
    ```
-2. **Configure a chave do Gemini** no Supabase:
+2. **Configure a chave do Manus AI** no Supabase:
    - Dashboard do projeto → **Project Settings** → **Edge Functions** → **Secrets**
-   - Adicione: `GEMINI_API_KEY` = sua chave (obter em https://aistudio.google.com/apikey)
-3. Opcional: sem `GEMINI_API_KEY` a função ainda responde usando **apenas palavras-chave** (fallback). Com a chave, descrições difíceis são enviadas ao Gemini para categorização.
+   - Adicione: `MANUS_API_KEY` = sua chave (obter em https://manus.ai - Dashboard → API Integration)
+3. Opcional: sem `MANUS_API_KEY` a função ainda responde usando **apenas palavras-chave** (fallback). Com a chave, descrições difíceis são enviadas ao Manus AI para categorização.
 
 Enquanto a IA não estiver configurada, o app usa **regras locais + cache** (histórico de categorizações manuais), então muitas transações são categorizadas mesmo assim.
 

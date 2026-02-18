@@ -1,5 +1,6 @@
 import { supabase } from "@/integrations/supabase/client";
 import type { CategoryType } from "@/components/ui/CategoryBadge";
+import { sanitizeTransactionForInsert } from "./transactionSanitizer";
 
 export interface ColumnMapping {
   csvColumn: string;
@@ -36,8 +37,8 @@ export interface ParsedRow {
     description: string;
     amount: number; // sempre negativo (gasto)
     type: "EXPENSE";
-    category: CategoryType;
-    payment_method: "pix" | "boleto" | "card" | "cash";
+    /** Categoria fixa (bills, food, ...) ou custom (custom:<uuid>) */
+    category: string;
     status: "paid" | "pending";
     transaction_date: string;
     notes?: string;
@@ -55,12 +56,11 @@ export interface ImportResult {
   duplicates: number;
   failed: number;
   errors: { row: number; reason: string }[];
-  /** Linhas descartadas por serem entradas (app controla apenas gastos) */
+  /** Linhas descartadas por serem entradas (conta corrente: amount > 0 ignorado) */
   ignoredIncome?: number;
   createdCount?: number;
   linkedAccountId?: string | null;
   linkedCardId?: string | null;
-  appliedPaymentMethod?: DefaultPaymentMethodType;
 }
 
 // Category mapping for inference
@@ -92,16 +92,8 @@ const categoryMapping: Record<string, CategoryType> = {
   "pix recebido": "other", "transferência recebida": "other",
 };
 
-const paymentMapping: Record<string, "pix" | "boleto" | "card" | "cash"> = {
-  "pix": "pix", "boleto": "boleto",
-  "cartão": "card", "cartao": "card", "card": "card",
-  "crédito": "card", "credito": "card",
-  "débito": "card", "debito": "card",
-  "dinheiro": "cash", "cash": "cash",
-  "espécie": "cash", "especie": "cash",
-};
 
-// Patterns to detect non-transaction lines
+// Patterns to detect non-transaction lines (bank statements)
 const NON_TRANSACTION_PATTERNS = [
   /^ag[êe]ncia\s*[:\/-]/i,
   /^conta\s*[:\/-]/i,
@@ -114,6 +106,26 @@ const NON_TRANSACTION_PATTERNS = [
   /^cnpj\s*[:\/-]/i,
   /^total\s+(do\s+per[íi]odo|geral)/i,
   /^(resumo|totais|consolidado)/i,
+];
+
+// Patterns to detect summary/total lines in credit card statements
+const CARD_STATEMENT_SUMMARY_PATTERNS = [
+  /^total/i,
+  /^pagamento/i,
+  /^saldo/i,
+  /^encargos/i,
+  /^juros/i,
+  /^anuidade/i,
+  /^resumo/i,
+  /^parcelamento/i,
+  /^iof/i,
+  /^multa/i,
+  /^desconto/i,
+  /^ajuste/i,
+  /^estorno/i,
+  /^fatura\s+(anterior|atual|fechada)/i,
+  /^limite/i,
+  /^dispon[ií]vel/i,
 ];
 
 const HEADER_PATTERNS = [
@@ -225,7 +237,7 @@ function localAnalyzeCSV(csvContent: string): CSVAnalysis {
     } else if ((hasEntradaSaida && i === saidaIndex) || (debitoIndex >= 0 && i === debitoIndex)) {
       columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: debitoIndex >= 0 && i === debitoIndex ? "debito" : "saida", confidence: 0.95 });
       usedIndices.add(i);
-    } else if (/^(data|date|dia|dt|movimenta)/i.test(h)) {
+    } else if (/^(data|date|dia|dt|movimenta|vencimento|lan[cç]amento|compra|transa)/i.test(h)) {
       columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: "date", confidence: 0.9 });
       usedIndices.add(i);
     } else if (/descri|nome|hist[oó]rico|lan[cç]amento|estabelecimento/i.test(h)) {
@@ -240,9 +252,6 @@ function localAnalyzeCSV(csvContent: string): CSVAnalysis {
     } else if (/categ/i.test(h)) {
       columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: "category", confidence: 0.8 });
       usedIndices.add(i);
-    } else if (/pagamento|payment|forma|m[eé]todo/i.test(h)) {
-      columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: "payment_method", confidence: 0.8 });
-      usedIndices.add(i);
     }
   }
 
@@ -252,8 +261,40 @@ function localAnalyzeCSV(csvContent: string): CSVAnalysis {
     const sampleValues = dataRows.slice(0, 5).map(r => r[i] || "");
     
     if (!columnMappings.find(m => m.internalField === "date")) {
+      // Enhanced date detection: strings DD/MM/YYYY, YYYY-MM-DD, Excel serial numbers
       const datePattern = /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$|^\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}$/;
-      if (sampleValues.filter(v => datePattern.test(v.trim())).length >= 3) {
+      const dateMatches = sampleValues.filter(v => {
+        const trimmed = String(v).trim();
+        if (!trimmed) return false;
+        
+        // Check string date patterns (DD/MM/YYYY, YYYY-MM-DD)
+        if (datePattern.test(trimmed)) return true;
+        
+        // Check Excel serial numbers (integers between 1 and 100000)
+        // Handle both raw numbers and formatted numbers (e.g., "45234" or "45.234,00")
+        let numStr = trimmed.replace(/[^\d.]/g, ""); // Remove all non-digits except dot
+        // If it has comma, might be Brazilian format - try to parse
+        if (trimmed.includes(",") && !trimmed.includes(".")) {
+          // Brazilian format: "45234,00" -> treat as integer
+          numStr = trimmed.replace(/[^\d]/g, "");
+        }
+        const num = parseFloat(numStr);
+        if (!isNaN(num) && num > 1 && num < 100000) {
+          // Check if integer (Excel dates are usually integers)
+          if (num % 1 === 0 || (num % 1 < 0.01)) { // Allow small decimals (time component)
+            // Verify it's a valid date serial
+            const excelEpoch = new Date(1899, 11, 30);
+            const date = new Date(excelEpoch.getTime() + Math.round(num) * 86400000);
+            if (!isNaN(date.getTime()) && date.getFullYear() >= 1900 && date.getFullYear() <= 2100) {
+              return true;
+            }
+          }
+        }
+        return false;
+      });
+      // Require at least 50% of sample values to match date pattern
+      const nonEmptyValues = sampleValues.filter(v => String(v).trim());
+      if (dateMatches.length >= Math.max(3, Math.floor(nonEmptyValues.length * 0.5))) {
         columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: "date", confidence: 0.7 });
         usedIndices.add(i);
         continue;
@@ -310,10 +351,20 @@ function localAnalyzeCSV(csvContent: string): CSVAnalysis {
 /**
  * Parse Brazilian number format to float
  * Accepts: "1.234,56", "1234,56", "1234.56", "R$ 1.234,56", "-123,45", "(123,45)"
+ * Also handles Excel-formatted numbers and Date objects (returns null for dates)
  */
-export function parseLocalizedNumber(value: string | number | null): number | null {
+export function parseLocalizedNumber(value: string | number | Date | null): number | null {
   if (value === null || value === undefined || value === "") return null;
-  if (typeof value === "number") return value;
+  if (value instanceof Date) return null; // Dates should be parsed separately
+  if (typeof value === "number") {
+    // If it's a very large integer that could be an Excel date serial, return null
+    // (let parseDate handle it)
+    if (value > 1 && value < 100000 && value % 1 === 0) {
+      // Could be Excel date serial - but we'll let the caller decide
+      // For now, return as-is (it's a valid number)
+    }
+    return value;
+  }
 
   let str = String(value).trim();
   
@@ -370,17 +421,22 @@ export interface ShouldImportAsExpenseResult {
 
 /**
  * Verifica se a linha deve ser importada como gasto.
- * Entradas (crédito ou valor positivo) são descartadas.
+ * Entradas (crédito ou valor positivo) são descartadas em bank_account.
+ * Em credit_card: usa polaridade do arquivo (purchasesArePositive) para decidir:
+ *   - purchasesArePositive: amount > 0 => compra (importar como -abs); amount < 0 => ignorar
+ *   - purchasesAreNegative: amount < 0 => compra (manter); amount > 0 => ignorar
  */
 export function shouldImportAsExpense(
   cells: string[],
   mappingByField: Record<string, ColumnMapping>,
-  hasCreditoDebitoColumns: boolean
+  hasCreditoDebitoColumns: boolean,
+  sourceType: "bank_account" | "credit_card" = "bank_account",
+  purchasesArePositive?: boolean
 ): ShouldImportAsExpenseResult {
   const creditoCol = mappingByField["credito"] ?? mappingByField["entrada"];
   const debitoCol = mappingByField["debito"] ?? mappingByField["saida"];
 
-  // A) Colunas Crédito/Débito
+  // A) Colunas Crédito/Débito (comportamento igual para ambos os modos)
   if (hasCreditoDebitoColumns && (creditoCol || debitoCol)) {
     const creditoStr = creditoCol ? cells[creditoCol.csvIndex] ?? "" : "";
     const debitoStr = debitoCol ? cells[debitoCol.csvIndex] ?? "" : "";
@@ -404,6 +460,16 @@ export function shouldImportAsExpense(
     const valorStr = cells[amountCol.csvIndex] ?? "";
     const v = parseLocalizedNumber(valorStr);
     if (v !== null && v !== 0) {
+      if (sourceType === "credit_card") {
+        // Cartão: polaridade por arquivo (maioria positiva => compras são positivas)
+        const positiveIsPurchase = purchasesArePositive === true;
+        if (positiveIsPurchase) {
+          if (v > 0) return { import: true, amount: -Math.abs(v) };
+          return { import: false, reason: "positive_value_cartao" };
+        }
+        if (v < 0) return { import: true, amount: v };
+        return { import: false, reason: "positive_value_cartao" };
+      }
       if (v < 0) {
         return { import: true, amount: Math.abs(v) };
       }
@@ -416,24 +482,65 @@ export function shouldImportAsExpense(
 }
 
 /**
- * Parse date from various formats to ISO format (YYYY-MM-DD)
+ * Parse date from Excel serial number to ISO format (YYYY-MM-DD)
+ * Excel epoch: December 30, 1899 (day 0)
  */
-export function parseDate(value: string | null, dateFormat?: string): string | null {
-  if (!value || value.trim() === "") return null;
+function parseExcelSerialDate(serial: number): string | null {
+  if (serial < 1 || serial > 100000) return null;
+  // Excel epoch is December 30, 1899 (not January 1, 1900)
+  const excelEpoch = new Date(1899, 11, 30);
+  const date = new Date(excelEpoch.getTime() + serial * 86400000);
+  if (isNaN(date.getTime())) return null;
+  return formatDateISO(date);
+}
 
+/**
+ * Parse date from various formats to ISO format (YYYY-MM-DD)
+ * Supports: DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD, YYYY/MM/DD, DD/MM/YY, DD-MM-YY
+ * Also handles: Excel serial numbers, Date objects, strings with time
+ * Validates ranges (day 1-31, month 1-12) before creating Date object
+ */
+export function parseDate(value: string | number | Date | null, dateFormat?: string): string | null {
+  if (value === null || value === undefined) return null;
+  
+  // Handle Date objects
+  if (value instanceof Date) {
+    if (isNaN(value.getTime())) return null;
+    return formatDateISO(value);
+  }
+  
+  // Handle numbers (Excel serial dates)
+  if (typeof value === "number") {
+    return parseExcelSerialDate(value);
+  }
+  
+  // Handle strings
+  if (typeof value !== "string") return null;
+  
   const trimmed = value.trim();
+  if (trimmed === "") return null;
 
-  // Handle Excel serial dates
-  if (/^\d+(\.\d+)?$/.test(trimmed)) {
-    const serial = parseFloat(trimmed);
-    if (serial > 1 && serial < 100000) {
-      const excelEpoch = new Date(1899, 11, 30);
-      const date = new Date(excelEpoch.getTime() + serial * 86400000);
-      return formatDateISO(date);
-    }
+  // Remove all whitespace and normalize
+  const normalized = trimmed.replace(/\s+/g, "");
+
+  // Handle Excel serial dates (as string)
+  if (/^\d+(\.\d+)?$/.test(normalized)) {
+    const serial = parseFloat(normalized);
+    const result = parseExcelSerialDate(serial);
+    if (result) return result;
+  }
+  
+  // Handle dates with time (extract date part first)
+  // Examples: "14/11/2025 00:00:00", "2025-11-14 10:30:00"
+  let datePartToParse = normalized;
+  const dateTimeMatch = normalized.match(/^(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})/);
+  if (dateTimeMatch && normalized.length > dateTimeMatch[1].length) {
+    // Has time component, extract just the date part
+    datePartToParse = dateTimeMatch[1];
   }
 
   // Try to parse with detected format first
+  // Priority: DD/MM/YYYY (most common in Brazil) -> DD-MM-YYYY -> YYYY-MM-DD -> others
   const formats = [
     { regex: /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/, order: ["day", "month", "year"] },
     { regex: /^(\d{1,2})-(\d{1,2})-(\d{4})$/, order: ["day", "month", "year"] },
@@ -444,7 +551,7 @@ export function parseDate(value: string | null, dateFormat?: string): string | n
   ];
 
   for (const fmt of formats) {
-    const match = trimmed.match(fmt.regex);
+    const match = datePartToParse.match(fmt.regex);
     if (match) {
       const parts: Record<string, number> = {};
       fmt.order.forEach((key, idx) => {
@@ -457,8 +564,23 @@ export function parseDate(value: string | null, dateFormat?: string): string | n
         }
       });
 
-      const date = new Date(parts.year, parts.month - 1, parts.day);
-      if (!isNaN(date.getTime()) && date.getFullYear() === parts.year) {
+      // Validate ranges before creating Date
+      const day = parts.day;
+      const month = parts.month;
+      const year = parts.year;
+
+      if (!day || !month || !year || day < 1 || day > 31 || month < 1 || month > 12 || year < 1900 || year > 2100) {
+        continue; // Invalid ranges, try next format
+      }
+
+      // Create date and validate it's correct (handles invalid dates like 31/02)
+      const date = new Date(year, month - 1, day);
+      if (
+        !isNaN(date.getTime()) &&
+        date.getFullYear() === year &&
+        date.getMonth() === month - 1 &&
+        date.getDate() === day
+      ) {
         return formatDateISO(date);
       }
     }
@@ -489,20 +611,6 @@ export function inferCategory(description: string): CategoryType {
   return "other";
 }
 
-/**
- * Infer payment method from description
- */
-export function inferPaymentMethod(description: string): "pix" | "boleto" | "card" | "cash" {
-  const lower = description.toLowerCase();
-  
-  for (const [keyword, method] of Object.entries(paymentMapping)) {
-    if (lower.includes(keyword)) {
-      return method;
-    }
-  }
-  
-  return "pix"; // Default
-}
 
 /**
  * Generate a hash for deduplication
@@ -578,15 +686,47 @@ export function classifyTransaction(params: ClassifyTransactionParams): Classify
 }
 
 /**
+ * Check if a line is a summary/total line in credit card statements
+ */
+function isCardStatementSummaryLine(cells: string[], rawLine: string): boolean {
+  const joinedCells = cells.join(" ").trim().toLowerCase();
+  const joinedLower = rawLine.toLowerCase();
+  
+  // Check against card-specific summary patterns
+  for (const pattern of CARD_STATEMENT_SUMMARY_PATTERNS) {
+    if (pattern.test(joinedCells) || pattern.test(joinedLower)) {
+      return true;
+    }
+  }
+  
+  // Check if all cells are numbers and sum-like (likely a total row)
+  const numericCells = cells.filter(c => {
+    const cleaned = c.trim().replace(/[R$\s.,]/g, "");
+    return /^\d+$/.test(cleaned);
+  });
+  if (numericCells.length >= 2 && numericCells.length === cells.filter(c => c.trim()).length) {
+    // All cells are numbers - likely a total/summary row
+    return true;
+  }
+  
+  return false;
+}
+
+/**
  * Check if a line is a non-transaction line (header, informational, etc.)
  */
-function isNonTransactionLine(cells: string[], rawLine: string): { skip: boolean; reason?: string } {
+function isNonTransactionLine(cells: string[], rawLine: string, sourceType?: "bank_account" | "credit_card"): { skip: boolean; reason?: string } {
   const joinedCells = cells.join(" ").trim();
   const nonEmptyCells = cells.filter(c => c.trim() !== "");
   
   // Empty line
   if (nonEmptyCells.length === 0) {
     return { skip: true, reason: "Linha vazia" };
+  }
+  
+  // For credit card, check card-specific summary patterns first
+  if (sourceType === "credit_card" && isCardStatementSummaryLine(cells, rawLine)) {
+    return { skip: true, reason: "Linha de resumo/total (fatura de cartão)" };
   }
   
   // Check against patterns
@@ -618,14 +758,185 @@ function isLikelyAmount(str: string): boolean {
          /^-?\d+([.,]\d{1,2})?$/.test(cleaned);
 }
 
-function isLikelyDate(str: string): boolean {
-  return /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(str.trim()) ||
-         /^\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}$/.test(str.trim());
+function isLikelyDate(str: string | number | Date): boolean {
+  if (str instanceof Date) return true;
+  if (typeof str === "number") {
+    // Check if it's an Excel serial date
+    if (str > 1 && str < 100000 && str % 1 === 0) {
+      const excelEpoch = new Date(1899, 11, 30);
+      const date = new Date(excelEpoch.getTime() + str * 86400000);
+      return !isNaN(date.getTime()) && date.getFullYear() >= 1900 && date.getFullYear() <= 2100;
+    }
+    return false;
+  }
+  const trimmed = String(str).trim();
+  return /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(trimmed) ||
+         /^\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}$/.test(trimmed);
+}
+
+const CREDIT_CARD_POLARITY_SAMPLE_SIZE = 200;
+
+/** Headers that indicate a date column (card statements). */
+const CARD_DATE_HEADER_PATTERNS = /^(data|date|dia|dt|mov|movimenta|vencimento|lan[cç]amento|compra|transa)/i;
+
+/**
+ * Infer date column for credit card import when mapping has no date.
+ * 1) By header (data, date, lançamento, dt, mov, compra, vencimento, transa…)
+ * 2) By content: first 50 rows, column whose values parse as date (DD/MM/YYYY, YYYY-MM-DD, Excel serial).
+ */
+function inferDateColumnForCard(
+  lines: string[],
+  separator: string,
+  startIndex: number,
+  headers: string[],
+  mappingByField: Record<string, ColumnMapping>
+): ColumnMapping | null {
+  const usedIndices = new Set(Object.values(mappingByField).map(m => m.csvIndex));
+  const numCols = Math.max(...lines.slice(startIndex, startIndex + 5).map(l => l.split(separator).length), headers.length);
+
+  for (let i = 0; i < numCols; i++) {
+    if (usedIndices.has(i)) continue;
+    const h = (headers[i] ?? "").toLowerCase().trim();
+    if (CARD_DATE_HEADER_PATTERNS.test(h)) {
+      const csvColumn = headers[i] ?? `Coluna ${i + 1}`;
+      if (typeof process !== "undefined" && process.env?.NODE_ENV === "development") {
+        const samples = lines.slice(startIndex, startIndex + 3).map(l => {
+          const cells = l.split(separator).map(c => c.trim().replace(/^["']|["']$/g, ""));
+          return cells[i] ?? "";
+        });
+        console.log("[CSV Import Credit Card] Date column inferred by header:", { column: csvColumn, index: i, sampleValues: samples });
+      }
+      return { csvColumn, csvIndex: i, internalField: "date", confidence: 0.85 };
+    }
+  }
+
+  const sampleLimit = Math.min(50, lines.length - startIndex);
+  for (let col = 0; col < numCols; col++) {
+    if (usedIndices.has(col)) continue;
+    let matchCount = 0;
+    for (let r = startIndex; r < startIndex + sampleLimit && r < lines.length; r++) {
+      const cells = lines[r].split(separator).map(c => c.trim().replace(/^["']|["']$/g, ""));
+      const val = cells[col] ?? "";
+      if (!val.trim()) continue;
+      const parsed = parseDate(val);
+      if (parsed) matchCount++;
+    }
+    if (matchCount >= 3) {
+      const csvColumn = headers[col] ?? `Coluna ${col + 1}`;
+      if (typeof process !== "undefined" && process.env?.NODE_ENV === "development") {
+        const samples = lines.slice(startIndex, startIndex + 3).map(l => {
+          const cells = l.split(separator).map(c => c.trim().replace(/^["']|["']$/g, ""));
+          return cells[col] ?? "";
+        });
+        console.log("[CSV Import Credit Card] Date column inferred by content:", { column: csvColumn, index: col, sampleValues: samples });
+      }
+      return { csvColumn, csvIndex: col, internalField: "date", confidence: 0.7 };
+    }
+  }
+  return null;
+}
+
+/**
+ * Parse date for card statement. Supports DD/MM/YYYY, DD/MM/YYYY HH:mm:ss, YYYY-MM-DD, Date object, Excel serial.
+ * Returns "YYYY-MM-DD" or null.
+ */
+function parseCardDate(raw: string | number | Date | null | undefined): string | null {
+  if (raw === null || raw === undefined) return null;
+  if (raw instanceof Date) {
+    if (isNaN(raw.getTime())) return null;
+    return formatDateISO(raw);
+  }
+  if (typeof raw === "number") return parseExcelSerialDate(raw);
+  const trimmed = String(raw).trim().replace(/^["']|["']$/g, "");
+  if (!trimmed) return null;
+  return parseDate(trimmed);
+}
+
+/**
+ * For credit card import: ensure columnMappings includes a date column (inferred if missing).
+ * Call after analysis so the mapping step shows the date column.
+ */
+export function ensureCreditCardDateMapping(
+  csvContent: string,
+  mappings: ColumnMapping[],
+  separator: string,
+  hasHeader: boolean
+): ColumnMapping[] {
+  if (mappings.some(m => m.internalField === "date")) return mappings;
+  const lines = csvContent.split(/\r?\n/).filter(l => l.trim());
+  const startIndex = hasHeader ? 1 : 0;
+  const headerLine = lines[0] ?? "";
+  const headers = headerLine.split(separator).map(c => c.trim().replace(/^["']|["']$/g, ""));
+  const mappingByField: Record<string, ColumnMapping> = {};
+  for (const m of mappings) mappingByField[m.internalField] = m;
+  const inferred = inferDateColumnForCard(lines, separator, startIndex, headers, mappingByField);
+  if (inferred) return [...mappings, inferred];
+  return mappings;
+}
+
+/**
+ * Detect polarity for credit card statement: whether purchases appear as positive or negative.
+ * Samples up to 200 rows with non-zero amount and non-empty description; if majority is positive,
+ * purchasesArePositive = true (import amount > 0 as expense; ignore amount < 0).
+ */
+function computeCreditCardPolarity(
+  lines: string[],
+  separator: string,
+  startIndex: number,
+  mappingByField: Record<string, ColumnMapping>,
+  hasCreditoDebitoColumns: boolean
+): { purchasesArePositive: boolean; posCount: number; negCount: number } {
+  const amountCol = mappingByField["amount"];
+  const descCol = mappingByField["description"];
+  const creditoCol = mappingByField["credito"] ?? mappingByField["entrada"];
+  const debitoCol = mappingByField["debito"] ?? mappingByField["saida"];
+
+  let posCount = 0;
+  let negCount = 0;
+  const limit = Math.min(startIndex + CREDIT_CARD_POLARITY_SAMPLE_SIZE, lines.length);
+
+  for (let i = startIndex; i < limit; i++) {
+    const line = lines[i];
+    const cells = line.split(separator).map(c => c.trim().replace(/^["']|["']$/g, ""));
+    const skipCheck = isNonTransactionLine(cells, line, "credit_card");
+    if (skipCheck.skip) continue;
+
+    let rawAmount: number | null = null;
+    if (hasCreditoDebitoColumns && (creditoCol || debitoCol)) {
+      const debitoStr = debitoCol ? cells[debitoCol.csvIndex] ?? "" : "";
+      const creditoStr = creditoCol ? cells[creditoCol.csvIndex] ?? "" : "";
+      const d = parseLocalizedNumber(debitoStr);
+      const c = parseLocalizedNumber(creditoStr);
+      if (d !== null && d !== 0) rawAmount = -Math.abs(d);
+      else if (c !== null && c !== 0) rawAmount = Math.abs(c);
+    } else if (amountCol) {
+      const v = parseLocalizedNumber(cells[amountCol.csvIndex] ?? "");
+      if (v !== null && v !== 0) rawAmount = v;
+    }
+    if (rawAmount === null || rawAmount === 0) continue;
+
+    const description = descCol ? cells[descCol.csvIndex] ?? "" : "";
+    if (!description.trim()) continue;
+
+    if (rawAmount > 0) posCount++;
+    else negCount++;
+  }
+
+  const purchasesArePositive = posCount >= negCount;
+  if (typeof process !== "undefined" && process.env?.NODE_ENV === "development") {
+    console.log("[CSV Import Credit Card] Polarity:", {
+      purchasesArePositive,
+      posCount,
+      negCount,
+    });
+  }
+  return { purchasesArePositive, posCount, negCount };
 }
 
 /**
  * Parse CSV content into rows with the given column mappings
  * Toda linha importada vira despesa (amount negativo).
+ * sourceType === "credit_card": negativos são compras (aceitos), positivos são pagamentos/estornos (descartados).
  */
 export function parseCSVWithMappings(
   csvContent: string,
@@ -633,7 +944,10 @@ export function parseCSVWithMappings(
   separator: string,
   hasHeader: boolean,
   dateFormat?: string,
-  hasEntradaSaida?: boolean
+  hasEntradaSaida?: boolean,
+  sourceType: "bank_account" | "credit_card" = "bank_account",
+  /** Quando a coluna categoria está vazia ou não mapeada, usar esta (fixa ou custom:<uuid>). */
+  defaultCategory?: string
 ): ParsedRow[] {
   const lines = csvContent.split(/\r?\n/).filter(l => l.trim());
   const startIndex = hasHeader ? 1 : 0;
@@ -644,18 +958,40 @@ export function parseCSVWithMappings(
     mappingByField[m.internalField] = m;
   }
 
+  if (sourceType === "credit_card" && !mappingByField["date"]) {
+    const headerLine = lines[0] ?? "";
+    const headers = headerLine.split(separator).map(c => c.trim().replace(/^["']|["']$/g, ""));
+    const inferredDate = inferDateColumnForCard(lines, separator, startIndex, headers, mappingByField);
+    if (inferredDate) {
+      mappingByField["date"] = inferredDate;
+      mappings.push(inferredDate);
+    }
+  }
+
   const entradaCol = mappingByField["entrada"];
   const saidaCol = mappingByField["saida"];
   const creditoCol = mappingByField["credito"];
   const debitoCol = mappingByField["debito"];
   const hasCreditoDebitoColumns = !!(entradaCol || saidaCol || creditoCol || debitoCol);
 
+  let purchasesArePositive: boolean | undefined;
+  if (sourceType === "credit_card") {
+    const polarity = computeCreditCardPolarity(
+      lines,
+      separator,
+      startIndex,
+      mappingByField,
+      hasCreditoDebitoColumns
+    );
+    purchasesArePositive = polarity.purchasesArePositive;
+  }
+
   for (let i = startIndex; i < lines.length; i++) {
     const line = lines[i];
     const cells = line.split(separator).map(c => c.trim().replace(/^["']|["']$/g, ""));
     
-    // Check if this is a non-transaction line
-    const skipCheck = isNonTransactionLine(cells, line);
+    // Check if this is a non-transaction line (pass sourceType for card-specific checks)
+    const skipCheck = isNonTransactionLine(cells, line, sourceType);
     if (skipCheck.skip) {
       results.push({
         rowIndex: i + 1,
@@ -675,7 +1011,6 @@ export function parseCSVWithMappings(
     const amountCol = mappingByField["amount"];
     const dateCol = mappingByField["date"];
     const categoryCol = mappingByField["category"];
-    const paymentCol = mappingByField["payment_method"];
     const notesCol = mappingByField["notes"];
     const transactionTypeCol = mappingByField["transaction_type"];
 
@@ -695,17 +1030,25 @@ export function parseCSVWithMappings(
 
     const rowContext = `${description} ${cells.join(" ")}`.trim();
 
-    const expenseCheck = shouldImportAsExpense(cells, mappingByField, hasCreditoDebitoColumns);
+    const expenseCheck = shouldImportAsExpense(
+      cells,
+      mappingByField,
+      hasCreditoDebitoColumns,
+      sourceType,
+      purchasesArePositive
+    );
 
     if (!expenseCheck.import) {
       const reason =
-        expenseCheck.reason === "income_credit" || expenseCheck.reason === "income_positive_value"
-          ? "Entrada ignorada — app controla apenas gastos"
-          : expenseCheck.reason === "no_amount"
-            ? "Valor não encontrado"
-            : expenseCheck.reason === "zero_value"
-              ? "Valor zero"
-              : "Não importável";
+        expenseCheck.reason === "positive_value_cartao"
+          ? "Pagamento ou estorno ignorado"
+          : expenseCheck.reason === "income_credit" || expenseCheck.reason === "income_positive_value"
+            ? (sourceType === "bank_account" ? "Entrada ignorada (conta corrente)" : "Entrada ignorada — app controla apenas gastos")
+            : expenseCheck.reason === "no_amount"
+              ? "Valor não encontrado"
+              : expenseCheck.reason === "zero_value"
+                ? "Valor zero"
+                : "Não importável";
       results.push({
         rowIndex: i + 1,
         raw: line,
@@ -723,31 +1066,78 @@ export function parseCSVWithMappings(
     }
 
     // Parse date - NEVER default to today silently
-    const dateStr = dateCol ? cells[dateCol.csvIndex] : "";
-    const transaction_date = parseDate(dateStr, dateFormat);
+    // Extract date value (can be string, number, or Date object from XLSX)
+    let dateRaw: string | number | Date | null = null;
+    if (dateCol) {
+      const rawCell = cells[dateCol.csvIndex];
+      if (rawCell !== undefined && rawCell !== null && rawCell !== "") {
+        dateRaw = rawCell.trim().replace(/^["']|["']$/g, "");
+      }
+    }
+    
+    // Debug logging for credit_card mode (first 5 rows)
+    if (sourceType === "credit_card" && i < startIndex + 5 && dateCol) {
+      console.log(`[CSV Import Credit Card] Row ${i + 1}:`, {
+        rowIndex: i + 1,
+        dateRaw: dateRaw,
+        dateType: typeof dateRaw,
+        dateColumnIndex: dateCol.csvIndex,
+        dateColumnName: dateCol.csvColumn,
+        allCells: cells.slice(0, 5), // First 5 cells for context
+      });
+    }
+    
+    // For credit_card mode use parseCardDate (DD/MM/YYYY, with time, Excel serial, Date object)
+    let transaction_date: string | null = null;
+    if (dateRaw) {
+      if (sourceType === "credit_card") {
+        transaction_date = parseCardDate(dateRaw);
+        if (!transaction_date && typeof dateRaw === "string") {
+          const numStr = dateRaw.trim().replace(/[^\d.]/g, "");
+          if (dateRaw.includes(",") && !dateRaw.includes(".")) {
+            const n = parseFloat(dateRaw.replace(/[^\d]/g, ""));
+            if (!isNaN(n)) transaction_date = parseCardDate(n);
+          } else if (/^\d+(\.\d+)?$/.test(numStr)) {
+            const n = parseFloat(numStr);
+            if (n > 1 && n < 100000) transaction_date = parseCardDate(n);
+          }
+        }
+        if (transaction_date && i < startIndex + 5) {
+          console.log(`[CSV Import Credit Card] Row ${i + 1}: date parsed -> ${transaction_date}`);
+        }
+      } else {
+        transaction_date = parseDate(dateRaw, dateFormat);
+      }
+    }
     
     // Track if date is missing or invalid
     let dateWarning: string | null = null;
     let requiresDateConfirmation = false;
     
     if (!transaction_date) {
-      if (dateStr && dateStr.trim()) {
+      if (dateRaw && String(dateRaw).trim()) {
         // Date column exists but value is invalid
-        errors.push(`Data inválida: "${dateStr}"`);
+        errors.push(`Data inválida: "${dateRaw}"`);
+        if (sourceType === "credit_card" && i < startIndex + 5) {
+          console.warn(`[CSV Import Credit Card] Row ${i + 1}: Failed to parse date "${dateRaw}"`);
+        }
       } else {
         // No date value at all
         dateWarning = "Data não encontrada no extrato";
         requiresDateConfirmation = true;
+        if (sourceType === "credit_card" && i < startIndex + 5) {
+          console.warn(`[CSV Import Credit Card] Row ${i + 1}: No date column or empty date value`);
+        }
       }
     }
 
-    // Parse category
-    const categoryStr = categoryCol ? cells[categoryCol.csvIndex]?.toLowerCase() : "";
-    const category: CategoryType = categoryMapping[categoryStr] || inferCategory(description);
+    // Parse category: CSV value → mapping; senão defaultCategory (fixa ou custom:<uuid>); senão inferência
+    const categoryStr = categoryCol ? cells[categoryCol.csvIndex]?.toLowerCase()?.trim() : "";
+    const category: string =
+      (categoryStr && categoryMapping[categoryStr]) ||
+      defaultCategory ||
+      inferCategory(description);
 
-    // Parse payment method
-    const paymentStr = paymentCol ? cells[paymentCol.csvIndex]?.toLowerCase() : "";
-    const payment_method = paymentMapping[paymentStr] || inferPaymentMethod(description);
 
     // Notes
     const notes = notesCol ? cells[notesCol.csvIndex] : undefined;
@@ -768,7 +1158,10 @@ export function parseCSVWithMappings(
         requiresDateConfirmation,
       } as ParsedRow);
     } else if (!hasAmountError && transaction_date && amount !== null) {
-      const finalAmount = -Math.abs(amount);
+      // For credit_card: amount from shouldImportAsExpense is already final (negative)
+      // For bank_account: normalize to negative (expense)
+      const finalAmount =
+        sourceType === "credit_card" ? amount : -Math.abs(amount);
       results.push({
         rowIndex: i + 1,
         raw: line,
@@ -778,7 +1171,6 @@ export function parseCSVWithMappings(
           amount: finalAmount,
           type: "EXPENSE",
           category,
-          payment_method,
           status: "paid",
           transaction_date,
           notes: notes?.substring(0, 500),
@@ -802,17 +1194,16 @@ export function parseCSVWithMappings(
   return results;
 }
 
-export type DefaultPaymentMethodType = "pix" | "card" | "boleto" | "cash";
 
 export interface ImportTransactionsOptions {
   /** Optional account (bank) to link all imported transactions to. */
   accountId?: string | null;
   /** Optional credit card to link all imported transactions to (when CSV is card statement). */
   creditCardId?: string | null;
-  /** Payment method applied to all imported rows (default: pix). */
-  defaultPaymentMethod?: DefaultPaymentMethodType | null;
   /** Original filename for audit (inferred institution). */
   originalFilename?: string | null;
+  /** Source type: determines which fields are required/allowed */
+  sourceType?: "bank_account" | "credit_card";
 }
 
 /**
@@ -826,9 +1217,30 @@ export async function importTransactions(
   skipDuplicates = true,
   options?: ImportTransactionsOptions
 ): Promise<ImportResult> {
+  const sourceType = options?.sourceType ?? "bank_account";
+  // Sanitize parsed transactions to ensure only valid fields are sent
   const validTransactions = transactions
     .filter(t => t.parsed !== null && t.status === "OK")
-    .map(t => t.parsed);
+    .map(t => {
+      const parsed = t.parsed!;
+      // Cartão: sempre enviar amount negativo (gasto). App trata despesa = amount < 0.
+      const amount =
+        sourceType === "credit_card"
+          ? parsed.amount > 0
+            ? -Math.abs(parsed.amount)
+            : parsed.amount
+          : parsed.amount;
+      return {
+        description: parsed.description,
+        amount,
+        category: parsed.category,
+        status: parsed.status,
+        transaction_date: parsed.transaction_date,
+        notes: parsed.notes,
+        import_hash: parsed.import_hash,
+        // Explicitly exclude: payment_method, type (not in schema)
+      };
+    });
 
   if (validTransactions.length === 0) {
     return {
@@ -839,19 +1251,19 @@ export async function importTransactions(
     };
   }
 
-  // Try edge function first — always send defaultAccountId/defaultCardId/defaultPaymentMethod so backend applies to all rows
+  // Try edge function first — always send defaultAccountId/defaultCardId so backend applies to all rows
   try {
-    const defaultAccountId = options?.accountId ?? null;
-    const defaultCardId = options?.creditCardId ?? null;
-    const defaultPaymentMethod = options?.defaultPaymentMethod ?? "pix";
+    const defaultAccountId = sourceType === "credit_card" ? null : (options?.accountId ?? null);
+    const defaultCardId = sourceType === "credit_card" ? (options?.creditCardId ?? null) : null;
+    
     const body: Record<string, unknown> = {
       householdId,
       transactions: validTransactions,
       skipDuplicates,
       defaultAccountId,
       defaultCardId,
-      defaultPaymentMethod,
       originalFilename: options?.originalFilename ?? null,
+      sourceType: sourceType,
     };
 
     const { data, error } = await supabase.functions.invoke("import-csv", {
@@ -882,13 +1294,24 @@ export async function importTransactions(
   }
 }
 
+/** Shape used when sending to edge function or direct insert (sem type). */
+type TransactionForImport = {
+  description: string;
+  amount: number;
+  category: string;
+  status: "paid" | "pending";
+  transaction_date: string;
+  notes?: string;
+  import_hash?: string;
+};
+
 /**
  * Direct import fallback when edge function is unavailable.
  * Inserts transactions directly via Supabase client.
  */
 async function directImport(
   householdId: string,
-  transactions: Array<ParsedRow["parsed"]>,
+  transactions: TransactionForImport[],
   skipDuplicates: boolean,
   options?: ImportTransactionsOptions
 ): Promise<ImportResult> {
@@ -914,26 +1337,43 @@ async function directImport(
 
   const toInsert: any[] = [];
   const now = new Date().toISOString();
-  const accountId = options?.accountId ?? null;
-  const defaultPaymentMethod = options?.defaultPaymentMethod ?? "pix";
-  const creditCardId = defaultPaymentMethod === "card" ? (options?.creditCardId ?? null) : null;
+  const sourceType = options?.sourceType ?? "bank_account";
+  // Apply sourceType rules: credit_card requires creditCardId and null accountId, bank_account allows accountId and null creditCardId
+  const accountId = sourceType === "credit_card" ? null : (options?.accountId ?? null);
+  const creditCardId = sourceType === "credit_card" ? (options?.creditCardId ?? null) : null;
 
   for (let i = 0; i < transactions.length; i++) {
     const tx = transactions[i];
     if (!tx) continue;
 
-    if (skipDuplicates && tx.import_hash && existingHashes.has(tx.import_hash)) {
+    // Cartão: sempre gravar como gasto (amount negativo).
+    let normalizedAmount = tx.amount;
+    let dedupHash = tx.import_hash ?? null;
+    if (sourceType === "credit_card") {
+      normalizedAmount = -Math.abs(normalizedAmount);
+      if (!dedupHash) {
+        dedupHash = generateImportHash(tx.transaction_date, normalizedAmount, tx.description);
+      }
+    } else {
+      // Bank account: normalize to negative
+      normalizedAmount = -Math.abs(normalizedAmount);
+      if (!dedupHash) {
+        dedupHash = generateImportHash(tx.transaction_date, normalizedAmount, tx.description);
+      }
+    }
+
+    if (skipDuplicates && dedupHash && existingHashes.has(dedupHash)) {
       result.duplicates++;
       continue;
     }
 
-    toInsert.push({
+    // Construct insert object with only valid schema fields
+    const insertObj = {
       user_id: user.id,
       household_id: householdId,
       description: tx.description.substring(0, 255),
-      amount: tx.amount,
+      amount: normalizedAmount,
       category: tx.category || "other",
-      payment_method: defaultPaymentMethod,
       status: tx.status || "paid",
       transaction_date: tx.transaction_date,
       notes: tx.notes ? tx.notes.substring(0, 500) : null,
@@ -942,7 +1382,12 @@ async function directImport(
       credit_card_id: creditCardId,
       created_at: now,
       updated_at: now,
-    });
+    };
+    
+    // Sanitize to ensure no extra fields (e.g., payment_method) are included
+    // This is a safety guard against schema cache errors
+    const sanitized = sanitizeTransactionForInsert(insertObj);
+    toInsert.push(sanitized);
   }
 
   // Insert in batches of 50
@@ -964,21 +1409,54 @@ async function directImport(
 }
 
 /**
- * CSV Template - Standard format for the app
+ * CSV Template - Standard format for bank account
  */
-export const CSV_TEMPLATE_HEADER = "data,descricao,tipo,valor,categoria,forma_pagamento,conta";
+export const CSV_TEMPLATE_HEADER = "data,descricao,tipo,valor,categoria,conta";
+
+/**
+ * CSV Template - Credit card format
+ */
+export const CSV_TEMPLATE_HEADER_CREDIT_CARD = "data,descricao,tipo,valor,categoria";
 
 export const CSV_TEMPLATE_EXAMPLES = [
-  "2026-01-16,Supermercado Pão de Açúcar,EXPENSE,350.50,food,card,Conta Corrente",
-  "2026-01-17,Uber - corrida trabalho,EXPENSE,25.90,transport,pix,Conta Corrente",
+  "2026-01-16,Supermercado Pão de Açúcar,EXPENSE,350.50,food,Conta Corrente",
+  "2026-01-17,Uber - corrida trabalho,EXPENSE,25.90,transport,Conta Corrente",
+];
+
+export const CSV_TEMPLATE_EXAMPLES_CREDIT_CARD = [
+  "2026-01-16,Supermercado Pão de Açúcar,EXPENSE,350.50,food",
+  "2026-01-17,Uber - corrida trabalho,EXPENSE,25.90,transport",
 ];
 
 /**
  * Generate the standard CSV template for download
  */
-export function generateCSVTemplate(): string {
+export function generateCSVTemplate(sourceType: "bank_account" | "credit_card" = "bank_account"): string {
+  if (sourceType === "credit_card") {
+    const instructions = [
+      "# MODELO CSV PADRÃO - CasaClara (Cartão de Crédito)",
+      "# Este é o formato ideal para importação de faturas de cartão",
+      "#",
+      "# CAMPOS:",
+      "#   data: formato YYYY-MM-DD (ex: 2026-01-15) ou DD/MM/YYYY",
+      "#   descricao: texto descritivo da transação",
+      "#   tipo: EXPENSE (app controla apenas despesas)",
+      "#   valor: valor da despesa (ex: 150.50)",
+      "#   categoria: food, transport, bills, leisure, health, education, shopping, other",
+      "#",
+      "# REMOVA estas linhas de comentário antes de importar",
+      "#",
+    ];
+    
+    return [
+      ...instructions,
+      CSV_TEMPLATE_HEADER_CREDIT_CARD,
+      ...CSV_TEMPLATE_EXAMPLES_CREDIT_CARD,
+    ].join("\n");
+  }
+  
   const instructions = [
-    "# MODELO CSV PADRÃO - CasaClara",
+    "# MODELO CSV PADRÃO - CasaClara (Conta Corrente)",
     "# Este é o formato ideal para importação de transações",
     "#",
     "# CAMPOS:",
@@ -987,7 +1465,6 @@ export function generateCSVTemplate(): string {
     "#   tipo: EXPENSE (app controla apenas despesas)",
     "#   valor: valor da despesa (ex: 150.50)",
     "#   categoria: food, transport, bills, leisure, health, education, shopping, other",
-    "#   forma_pagamento: pix, card, boleto, cash",
     "#   conta: nome da conta (opcional)",
     "#",
     "# REMOVA estas linhas de comentário antes de importar",
@@ -1004,13 +1481,15 @@ export function generateCSVTemplate(): string {
 /**
  * Download the CSV template
  */
-export function downloadCSVTemplate(): void {
-  const content = generateCSVTemplate();
+export function downloadCSVTemplate(sourceType: "bank_account" | "credit_card" = "bank_account"): void {
+  const content = generateCSVTemplate(sourceType);
   const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = "modelo_importacao_casaclara.csv";
+  a.download = sourceType === "credit_card" 
+    ? "modelo_importacao_cartao_casaclara.csv" 
+    : "modelo_importacao_conta_casaclara.csv";
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -1032,14 +1511,39 @@ export function isStandardFormat(csvContent: string): boolean {
 }
 
 /**
- * Parse a standard format CSV directly (skip AI analysis)
+ * Parse a standard format CSV directly (skip AI analysis).
+ * sourceType === "credit_card": polaridade detectada por arquivo (maioria positiva => compras positivas).
  */
-export function parseStandardCSV(csvContent: string): ParsedRow[] {
+export function parseStandardCSV(csvContent: string, sourceType: "bank_account" | "credit_card" = "bank_account"): ParsedRow[] {
   const lines = csvContent.split(/\r?\n/).filter(l => l.trim() && !l.startsWith("#"));
   if (lines.length < 2) return [];
   
   const results: ParsedRow[] = [];
-  
+
+  let purchasesArePositive: boolean | undefined;
+  if (sourceType === "credit_card") {
+    let posCount = 0;
+    let negCount = 0;
+    const limit = Math.min(1 + CREDIT_CARD_POLARITY_SAMPLE_SIZE, lines.length);
+    for (let i = 1; i < limit; i++) {
+      const cells = lines[i].split(",").map(c => c.trim().replace(/^["']|["']$/g, ""));
+      if (cells.length < 4) continue;
+      const [, description, , valorStr] = cells;
+      const rawAmount = parseLocalizedNumber(valorStr);
+      if (rawAmount === null || rawAmount === 0 || !(description || "").trim()) continue;
+      if (rawAmount > 0) posCount++;
+      else negCount++;
+    }
+    purchasesArePositive = posCount >= negCount;
+    if (typeof process !== "undefined" && process.env?.NODE_ENV === "development") {
+      console.log("[CSV Import Credit Card] Polarity (standard CSV):", {
+        purchasesArePositive,
+        posCount,
+        negCount,
+      });
+    }
+  }
+
   // Skip header
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i];
@@ -1057,7 +1561,11 @@ export function parseStandardCSV(csvContent: string): ParsedRow[] {
       continue;
     }
     
-    const [dateStr, description, typeStr, valorStr, categoryStr, paymentStr] = cells;
+    // CSV format: data,descricao,tipo,valor,categoria,conta (forma_pagamento removido)
+    const [dateStrRaw, description, typeStr, valorStr, categoryStr, contaStr] = cells;
+    
+    // Clean date string (remove quotes, trim whitespace)
+    const dateStr = (dateStrRaw || "").trim().replace(/^["']|["']$/g, "");
     
     // Parse date - NEVER default to today silently
     const transaction_date = parseDate(dateStr);
@@ -1087,31 +1595,60 @@ export function parseStandardCSV(csvContent: string): ParsedRow[] {
       continue;
     }
 
-    const tipoUpper = (typeStr ?? "").toUpperCase().trim();
-    const tipoIndicaDespesa = /^(EXPENSE|DESPESA|DEBITO|DÉBITO|SAIDA|SAÍDA)$/i.test(tipoUpper);
-    const isGasto = rawAmount < 0 || (rawAmount > 0 && tipoIndicaDespesa);
-
-    if (!isGasto) {
-      results.push({
-        rowIndex: i + 1,
-        raw: line,
-        status: "SKIPPED",
-        parsed: null,
-        errors: [],
-        reason: "Entrada ignorada — app controla apenas gastos",
-      });
-      continue;
+    if (sourceType === "credit_card") {
+      // Cartão: polaridade por arquivo
+      const positiveIsPurchase = purchasesArePositive === true;
+      if (positiveIsPurchase && rawAmount < 0) {
+        results.push({
+          rowIndex: i + 1,
+          raw: line,
+          status: "SKIPPED",
+          parsed: null,
+          errors: [],
+          reason: "Pagamento ou estorno ignorado",
+        });
+        continue;
+      }
+      if (!positiveIsPurchase && rawAmount > 0) {
+        results.push({
+          rowIndex: i + 1,
+          raw: line,
+          status: "SKIPPED",
+          parsed: null,
+          errors: [],
+          reason: "Pagamento ou estorno ignorado",
+        });
+        continue;
+      }
+      // else: (positiveIsPurchase && rawAmount > 0) or (!positiveIsPurchase && rawAmount < 0) => import
+    } else {
+      // bank_account: só sinal — amount < 0 => SAÍDA (importar), amount > 0 => ENTRADA (ignorar)
+      if (rawAmount > 0) {
+        results.push({
+          rowIndex: i + 1,
+          raw: line,
+          status: "SKIPPED",
+          parsed: null,
+          errors: [],
+          reason: "Entrada ignorada (conta corrente)",
+        });
+        continue;
+      }
+      // rawAmount < 0 => importar como saída (manter negativo)
     }
 
-    const finalAmount = -Math.abs(rawAmount);
+    // For credit_card: final amount by polarity (already decided above)
+    // For bank_account: saída = manter negativo
+    const finalAmount =
+      sourceType === "credit_card"
+        ? purchasesArePositive
+          ? -Math.abs(rawAmount)
+          : rawAmount
+        : -Math.abs(rawAmount);
 
-    const category: CategoryType = categoryMapping[categoryStr?.toLowerCase() || ""] ||
-                                   inferCategory(description) ||
-                                   "other";
-
-    const payment_method = paymentMapping[paymentStr?.toLowerCase() || ""] ||
-                          inferPaymentMethod(description) ||
-                          "pix";
+    const category: string = categoryMapping[categoryStr?.toLowerCase() || ""] ||
+                             inferCategory(description) ||
+                             "other";
 
     results.push({
       rowIndex: i + 1,
@@ -1122,7 +1659,6 @@ export function parseStandardCSV(csvContent: string): ParsedRow[] {
         amount: finalAmount,
         type: "EXPENSE",
         category,
-        payment_method,
         status: "paid",
         transaction_date,
         import_hash: generateImportHash(transaction_date, finalAmount, description),
@@ -1140,7 +1676,6 @@ export interface ConvertedTransaction {
   tipo: "EXPENSE";
   valor: number;
   categoria: string;
-  forma_pagamento: string;
   conta?: string;
   status: "OK" | "SKIPPED" | "ERROR";
   reason?: string;
@@ -1184,7 +1719,6 @@ export async function convertBankStatement(csvContent: string): Promise<Conversi
         tipo: "EXPENSE",
         valor: Math.abs(parsed.amount),
         categoria: parsed.category,
-        forma_pagamento: parsed.payment_method,
         status: "OK" as const,
         originalRow: row.raw,
       };
@@ -1195,7 +1729,6 @@ export async function convertBankStatement(csvContent: string): Promise<Conversi
         tipo: "EXPENSE" as const,
         valor: 0,
         categoria: "other",
-        forma_pagamento: "pix",
         status: "SKIPPED" as const,
         reason: row.reason,
         originalRow: row.raw,
@@ -1207,7 +1740,6 @@ export async function convertBankStatement(csvContent: string): Promise<Conversi
         tipo: "EXPENSE" as const,
         valor: 0,
         categoria: "other",
-        forma_pagamento: "pix",
         status: "ERROR" as const,
         reason: row.reason || row.errors[0],
         originalRow: row.raw,
@@ -1239,7 +1771,7 @@ export function generateStandardCSV(transactions: ConvertedTransaction[]): strin
   const lines = [
     CSV_TEMPLATE_HEADER,
     ...okTransactions.map(t => 
-      `${t.data},${escapeCsvField(t.descricao)},${t.tipo},${t.valor.toFixed(2)},${t.categoria},${t.forma_pagamento},${t.conta || ""}`
+      `${t.data},${escapeCsvField(t.descricao)},${t.tipo},${t.valor.toFixed(2)},${t.categoria},${t.conta || ""}`
     ),
   ];
   

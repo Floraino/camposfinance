@@ -8,7 +8,10 @@ import { useToast } from "@/hooks/use-toast";
 import { useHousehold } from "@/hooks/useHousehold";
 import ReactMarkdown from "react-markdown";
 import { DestructiveActionConfirmation, DestructiveActionPreview } from "./DestructiveActionConfirmation";
+import { CategorizePreviewModal, type CategorizePreviewPayload } from "./CategorizePreviewModal";
 import { deleteTransactionsBatch } from "@/services/destructiveActionsService";
+import { updateTransactionsCategory } from "@/services/transactionService";
+import type { CategoryType } from "@/components/ui/CategoryBadge";
 
 type MessageStatus = "loading" | "done" | "error";
 
@@ -49,7 +52,20 @@ function parseDeletionPreview(content: string): DestructiveActionPreview | null 
 
 // Remove hidden preview data from displayed content
 function cleanMessageContent(content: string): string {
-  return content.replace(/<!-- DELETION_PREVIEW:.+? -->/g, "").trim();
+  return content
+    .replace(/<!-- DELETION_PREVIEW:.+? -->/g, "")
+    .replace(/<!-- CATEGORIZE_PREVIEW:.+? -->/g, "")
+    .trim();
+}
+
+export function parseCategorizePreview(content: string): CategorizePreviewPayload | null {
+  const match = content.match(/<!-- CATEGORIZE_PREVIEW:(.+?) -->/s);
+  if (!match) return null;
+  try {
+    return JSON.parse(match[1]) as CategorizePreviewPayload;
+  } catch {
+    return null;
+  }
 }
 
 export function AssistantChat() {
@@ -60,6 +76,8 @@ export function AssistantChat() {
   const [confirmationOpen, setConfirmationOpen] = useState(false);
   const [currentPreview, setCurrentPreview] = useState<DestructiveActionPreview | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [categorizePreview, setCategorizePreview] = useState<CategorizePreviewPayload | null>(null);
+  const [isApplyingCategories, setIsApplyingCategories] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
   const { currentHousehold, hasSelectedHousehold } = useHousehold();
@@ -127,14 +145,14 @@ export function AssistantChat() {
           id: "1",
           role: "assistant",
           content: isNetworkError
-            ? `Olá! Sou o Odin, mas não consegui conectar ao servidor agora. Verifique sua internet e, se estiver em produção, se a chave **GEMINI_API_KEY** está configurada nas Edge Functions do Supabase. Como posso te ajudar? 💰`
+            ? `Olá! Sou o Odin, mas não consegui conectar ao servidor agora. Verifique sua internet e, se estiver em produção, se a chave **MANUS_API_KEY** está configurada nas Edge Functions do Supabase. Como posso te ajudar? 💰`
             : `Olá! Sou o Odin, seu assistente financeiro da família **${currentHousehold.name}**. 🔒 Modo de Segurança está ativo. Como posso te ajudar? 💰`,
           timestamp: new Date(),
         }]);
         if (isNetworkError) {
           toast({
             title: "Conexão com o Odin falhou",
-            description: "Verifique sua conexão e a configuração da Edge Function clara-chat (GEMINI_API_KEY nos Secrets).",
+            description: "Verifique sua conexão e a configuração da Edge Function clara-chat (MANUS_API_KEY nos Secrets).",
             variant: "destructive",
           });
         }
@@ -237,7 +255,7 @@ export function AssistantChat() {
       if (resp.status === 503 && error.code === "AI_NOT_CONFIGURED") {
         toast({
           title: "Odin não configurado",
-          description: "A chave Gemini (GEMINI_API_KEY) não está configurada nas Edge Functions do Supabase. Configure em: Dashboard → Edge Functions → Secrets.",
+          description: "A chave Manus AI (MANUS_API_KEY) não está configurada nas Edge Functions do Supabase. Configure em: Dashboard → Edge Functions → Secrets.",
           variant: "destructive",
         });
         return;
@@ -266,6 +284,8 @@ export function AssistantChat() {
     const updateAssistantMessage = (content: string) => {
       assistantContent = content;
       const preview = parseDeletionPreview(content);
+      const categorizePayload = parseCategorizePreview(content);
+      if (categorizePayload) setCategorizePreview(categorizePayload);
       const cleanContent = cleanMessageContent(content);
 
       if (assistantMessageId) {
@@ -391,7 +411,7 @@ export function AssistantChat() {
       toast({
         title: "Erro ao conectar com o Odin",
         description: isNetworkError
-          ? "Verifique sua conexão. Se estiver em produção, confira se a Edge Function clara-chat está publicada e se GEMINI_API_KEY está nos Secrets do Supabase."
+          ? "Verifique sua conexão. Se estiver em produção, confira se a Edge Function clara-chat está publicada e se MANUS_API_KEY está nos Secrets do Supabase."
           : (msg || "Não foi possível enviar a mensagem"),
         variant: "destructive",
       });
@@ -405,6 +425,7 @@ export function AssistantChat() {
     { label: "📊 Diagnóstico de economia", quickAction: "diagnostico_periodo_total" },
     { label: "🎯 Ver metas do mês", quickAction: "ver_metas_mes" },
     { label: "📋 Verificar pendências", quickAction: "verificar_pendencias" },
+    { label: "🏷️ Categorizar sem categoria", quickAction: "categorizar_sem_categoria" },
     { label: "📜 Listar regras automáticas", quickAction: "listar_regras" },
     { label: "💡 Sugestões de economia", quickAction: "diagnostico_periodo_total" },
     { label: "💰 Maiores gastos do mês", quickAction: "maiores_gastos" },
@@ -538,6 +559,45 @@ export function AssistantChat() {
 
     // Clear deletion previews
     setMessages(prev => prev.map(m => ({ ...m, deletionPreview: undefined })));
+  }, []);
+
+  const handleConfirmCategorize = useCallback(
+    async (updates: Array<{ id: string; category: CategoryType }>) => {
+      if (!currentHousehold || !categorizePreview || !updates.length) return;
+      setIsApplyingCategories(true);
+      try {
+        const { updated, failed } = await updateTransactionsCategory(currentHousehold.id, updates);
+        const resultMessage: Message = {
+          id: Date.now().toString(),
+          role: "assistant",
+          content:
+            failed.length > 0
+              ? `✅ **${updated}** categoria(s) aplicada(s). ⚠️ ${failed.length} falha(s): ${failed.map((f) => f.reason).join(", ")}`
+              : `✅ **${updated}** categoria(s) aplicada(s) com sucesso na família **${categorizePreview.householdName}**!`,
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, resultMessage]);
+        setCategorizePreview(null);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Erro ao aplicar categorias";
+        toast({ title: "Erro", description: msg, variant: "destructive" });
+      } finally {
+        setIsApplyingCategories(false);
+      }
+    },
+    [currentHousehold, categorizePreview, toast]
+  );
+
+  const handleCancelCategorize = useCallback(() => {
+    setCategorizePreview(null);
+    setMessages((prev) =>
+      prev.concat({
+        id: Date.now().toString(),
+        role: "assistant",
+        content: "🚫 Categorização cancelada. Nenhuma alteração feita.",
+        timestamp: new Date(),
+      })
+    );
   }, []);
 
   if (isInitializing) {
@@ -726,6 +786,15 @@ export function AssistantChat() {
         onConfirm={handleConfirmDeletion}
         onCancel={handleCancelDeletion}
         isOpen={confirmationOpen}
+      />
+
+      {/* Categorize uncategorized preview — Modo Seguro: confirmar antes de aplicar */}
+      <CategorizePreviewModal
+        payload={categorizePreview}
+        open={!!categorizePreview}
+        onConfirm={handleConfirmCategorize}
+        onCancel={handleCancelCategorize}
+        isApplying={isApplyingCategories}
       />
     </div>
   );

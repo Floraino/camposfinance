@@ -70,13 +70,11 @@ export async function categorizeLocal(
   ]);
 
   const cacheMap = await getCacheByFingerprints(familyId, fingerprints);
-  const cacheMapStr = new Map<string, string>();
-  cacheMap.forEach((v, k) => cacheMapStr.set(k, v));
 
   const toApply: Array<{ id: string; categoryId: string; fingerprint: string }> = [];
 
   for (const tx of txs) {
-    const match = categorizeOne(tx, cacheMapStr, rules);
+    const match = categorizeOne(tx, cacheMap, rules);
     if (match && shouldAutoApply(match.confidence)) {
       toApply.push({
         id: tx.id,

@@ -130,7 +130,7 @@ export interface TransactionInput {
 
 export interface CategorizationResultItem {
   id: string;
-  category: CategoryType;
+  category: string;
   confidence: number;
   source: "rule" | "cache" | "ai";
   reason?: string;
@@ -153,19 +153,15 @@ const AUTO_APPLY_THRESHOLD = 0.85;
 
 /**
  * Categoriza uma transação usando regras do usuário + cache + regras built-in (sem IA).
- * Retorna resultado para aplicar ou sugerir.
+ * category pode ser fixa (CategoryType) ou custom (custom:<uuid>).
  */
 export function categorizeWithRulesAndCache(
   tx: TransactionInput,
-  cacheCategory: CategoryType | null,
-  userRuleCategory: CategoryType | null
-): { category: CategoryType; confidence: number; source: "rule" | "cache" } | null {
-  if (userRuleCategory && isValidCategory(userRuleCategory)) {
-    return { category: userRuleCategory, confidence: 0.95, source: "rule" };
-  }
-  if (cacheCategory && isValidCategory(cacheCategory)) {
-    return { category: cacheCategory, confidence: 0.95, source: "cache" };
-  }
+  cacheCategory: string | null,
+  userRuleCategory: string | null
+): { category: string; confidence: number; source: "rule" | "cache" } | null {
+  if (userRuleCategory) return { category: userRuleCategory, confidence: 0.95, source: "rule" };
+  if (cacheCategory) return { category: cacheCategory, confidence: 0.95, source: "cache" };
   const builtIn = applyBuiltInRules(tx.description);
   if (builtIn) return { category: builtIn.category, confidence: builtIn.confidence, source: "rule" };
   return null;
@@ -176,9 +172,9 @@ export function categorizeWithRulesAndCache(
  */
 export function categorizeOne(
   tx: TransactionInput,
-  cacheMap: Map<string, CategoryType>,
+  cacheMap: Map<string, string>,
   userRules: UserRule[]
-): { category: CategoryType; confidence: number; source: "rule" | "cache" } | null {
+): { category: string; confidence: number; source: "rule" | "cache" } | null {
   const fp = merchantFingerprint(tx.description);
   const userCat = applyUserRules(tx.description, userRules);
   const cacheCat = cacheMap.get(fp) ?? null;
@@ -201,15 +197,13 @@ export interface UserRule {
 }
 
 /**
- * Aplica regras do usuário (maior prioridade primeiro). Retorna categoria ou null.
+ * Aplica regras do usuário (maior prioridade primeiro). Retorna categoria (fixa ou custom:<uuid>) ou null.
  */
-export function applyUserRules(description: string, userRules: UserRule[]): CategoryType | null {
+export function applyUserRules(description: string, userRules: UserRule[]): string | null {
   const upper = description.toUpperCase();
-  const upperPatterns = userRules
-    .slice()
-    .sort((a, b) => b.priority - a.priority)
-    .filter((r) => isValidCategory(r.category));
-  for (const r of upperPatterns) {
+  const sorted = userRules.slice().sort((a, b) => b.priority - a.priority);
+  for (const r of sorted) {
+    if (!r.category?.trim()) continue;
     const pat = r.pattern.toUpperCase();
     const match =
       r.match_type === "exact"
@@ -217,7 +211,7 @@ export function applyUserRules(description: string, userRules: UserRule[]): Cate
         : r.match_type === "starts_with"
           ? upper.startsWith(pat)
           : upper.includes(pat);
-    if (match) return r.category as CategoryType;
+    if (match) return r.category;
   }
   return null;
 }

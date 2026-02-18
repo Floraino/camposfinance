@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
-import { CategoryIcon, type CategoryType } from "@/components/ui/CategoryBadge";
+import { CategoryIcon } from "@/components/ui/CategoryBadge";
+import type { HouseholdCategory } from "@/services/householdCategoriesService";
 import { Check, Clock, RefreshCw, User } from "lucide-react";
 
 export interface Transaction {
@@ -7,8 +8,8 @@ export interface Transaction {
   description: string;
   amount: number;
   date: string;
-  category: CategoryType;
-  paymentMethod: "pix" | "boleto" | "card" | "cash";
+  /** Categoria fixa ou custom (custom:<uuid>) */
+  category: string;
   status: "paid" | "pending";
   isRecurring?: boolean;
   memberName?: string;
@@ -17,9 +18,11 @@ export interface Transaction {
 interface TransactionCardProps {
   transaction: Transaction;
   onClick?: () => void;
+  /** Para exibir nome/cor de categorias personalizadas */
+  customCategories?: HouseholdCategory[];
 }
 
-export function TransactionCard({ transaction, onClick }: TransactionCardProps) {
+export function TransactionCard({ transaction, onClick, customCategories }: TransactionCardProps) {
   const { description, amount, date, category, status, isRecurring, memberName } = transaction;
 
   const formatCurrency = (value: number) => {
@@ -42,7 +45,7 @@ export function TransactionCard({ transaction, onClick }: TransactionCardProps) 
       onClick={onClick}
       className="transaction-card w-full text-left"
     >
-      <CategoryIcon category={category} size="md" />
+      <CategoryIcon category={category} size="md" customCategories={customCategories} />
       
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">

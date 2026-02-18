@@ -14,7 +14,6 @@ export interface ExtractedReceipt {
   amount: number;
   date: string;
   category: string;
-  paymentMethod: string;
   items: Array<{ name: string; quantity: number; price: number }>;
   establishment: string;
   confidence: number;
@@ -39,12 +38,6 @@ const categoryOptions: { value: CategoryType; label: string }[] = [
   { value: "other", label: "Outros" },
 ];
 
-const paymentOptions = [
-  { value: "pix", label: "PIX" },
-  { value: "card", label: "Cartão" },
-  { value: "cash", label: "Dinheiro" },
-  { value: "boleto", label: "Boleto" },
-];
 
 export function ReceiptReviewSheet({ isOpen, onClose, extractedData, onSave, householdId }: ReceiptReviewSheetProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -53,7 +46,6 @@ export function ReceiptReviewSheet({ isOpen, onClose, extractedData, onSave, hou
     amount: extractedData.amount,
     date: extractedData.date,
     category: extractedData.category as CategoryType,
-    paymentMethod: extractedData.paymentMethod as "pix" | "boleto" | "card" | "cash",
   });
   const { toast } = useToast();
 
@@ -64,7 +56,6 @@ export function ReceiptReviewSheet({ isOpen, onClose, extractedData, onSave, hou
       amount: extractedData.amount,
       date: extractedData.date,
       category: extractedData.category as CategoryType,
-      paymentMethod: extractedData.paymentMethod as "pix" | "boleto" | "card" | "cash",
     });
   }, [extractedData]);
 
@@ -96,7 +87,6 @@ export function ReceiptReviewSheet({ isOpen, onClose, extractedData, onSave, hou
         description: formData.description,
         amount: -Math.abs(formData.amount), // Expenses are negative
         category: formData.category,
-        payment_method: formData.paymentMethod,
         status: "paid",
         is_recurring: false,
         transaction_date: formData.date,
@@ -197,26 +187,6 @@ export function ReceiptReviewSheet({ isOpen, onClose, extractedData, onSave, hou
                       <CategoryBadge category={option.value} size="sm" />
                       <span>{option.label}</span>
                     </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Payment Method */}
-          <div className="space-y-2">
-            <Label>Forma de Pagamento</Label>
-            <Select
-              value={formData.paymentMethod}
-              onValueChange={(value) => setFormData({ ...formData, paymentMethod: value as "pix" | "boleto" | "card" | "cash" })}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {paymentOptions.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
                   </SelectItem>
                 ))}
               </SelectContent>

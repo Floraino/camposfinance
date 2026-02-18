@@ -112,7 +112,6 @@ export default function CreditCards() {
           txByCard[card.id] = (raw || []).map((t: any) => ({
             ...t,
             category: t.category as CategoryType,
-            payment_method: t.payment_method as "pix" | "boleto" | "card" | "cash",
             status: t.status as "paid" | "pending",
             member_name: (t.family_members as { name: string } | null)?.name,
           })) as Transaction[];

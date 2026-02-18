@@ -10,7 +10,9 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "db:push": "npx supabase db push",
+    "db:push:force": "npx supabase db push --include-all"
   },
   "dependencies": {
     "@capacitor/android": "^8.0.2",

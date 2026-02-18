@@ -4,11 +4,13 @@ import { useNavigate } from "react-router-dom";
 import { MobileLayout } from "@/components/layout/MobileLayout";
 import { TransactionCard, type Transaction as UITransaction } from "@/components/transactions/TransactionCard";
 import { EditTransactionSheet } from "@/components/transactions/EditTransactionSheet";
-import { CategoryBadge, categoryConfig, type CategoryType } from "@/components/ui/CategoryBadge";
+import { CategoryBadge } from "@/components/ui/CategoryBadge";
+import { getCategoryOptionsForPicker } from "@/lib/categoryResolvers";
 import { cn } from "@/lib/utils";
 import { getTransactions, deleteTransactionsBulk, type Transaction } from "@/services/transactionService";
 import { useToast } from "@/hooks/use-toast";
 import { useHousehold } from "@/hooks/useHousehold";
+import { useHouseholdCategories } from "@/hooks/useHouseholdCategories";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -22,7 +24,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 
-type FilterCategory = "all" | CategoryType;
+type FilterCategory = "all" | string;
 
 export default function Transactions() {
   const navigate = useNavigate();
@@ -40,6 +42,7 @@ export default function Transactions() {
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const { toast } = useToast();
+  const { categories: customCategories } = useHouseholdCategories(currentHousehold?.id);
 
   // Redirect to household selection if no household selected
   useEffect(() => {
@@ -168,7 +171,6 @@ export default function Transactions() {
     amount: Number(tx.amount),
     date: tx.transaction_date,
     category: tx.category,
-    paymentMethod: tx.payment_method,
     status: tx.status,
     isRecurring: tx.is_recurring,
   });
@@ -307,16 +309,16 @@ export default function Transactions() {
               >
                 Todos
               </button>
-              {(Object.keys(categoryConfig) as CategoryType[]).map((cat) => (
+              {getCategoryOptionsForPicker(customCategories).map((opt) => (
                 <button
-                  key={cat}
-                  onClick={() => setSelectedCategory(cat)}
+                  key={opt.value}
+                  onClick={() => setSelectedCategory(opt.value)}
                   className={cn(
                     "transition-all",
-                    selectedCategory === cat && "ring-2 ring-primary ring-offset-2 ring-offset-background rounded-full"
+                    selectedCategory === opt.value && "ring-2 ring-primary ring-offset-2 ring-offset-background rounded-full"
                   )}
                 >
-                  <CategoryBadge category={cat} size="md" />
+                  <CategoryBadge category={opt.value} size="md" customCategories={customCategories} />
                 </button>
               ))}
             </div>
@@ -346,6 +348,7 @@ export default function Transactions() {
                       <TransactionCard 
                         transaction={mapToUI(tx)} 
                         onClick={() => selectMode ? toggleSelect(tx.id) : handleTransactionClick(tx)}
+                        customCategories={customCategories}
                       />
                     </div>
                   </div>

@@ -196,12 +196,12 @@ serve(async (req) => {
     const hasEntradaSaida = entradaIndex >= 0 && saidaIndex >= 0;
 
     // Use AI to analyze the CSV structure
-    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+    const MANUS_API_KEY = Deno.env.get("MANUS_API_KEY");
     
     let columnMappings: ColumnMapping[] = [];
     let dateFormat = "dd/MM/yyyy";
     
-    if (GEMINI_API_KEY) {
+    if (MANUS_API_KEY) {
       const sampleData = {
         headers,
         rows: dataRows.slice(0, 10),
@@ -226,7 +226,6 @@ Your task:
    - date (data - CRITICAL: look for columns with date patterns like "dd/mm/yyyy", "yyyy-mm-dd", "Data", "Data Mov.", "Data da transação", "Dt", "Movimentação")
    - description (descrição - usually the longest text field, establishment names, histórico)
    - category (categoria - optional, may not exist)
-   - payment_method (forma de pagamento - optional: pix, boleto, cartão, dinheiro)
    - notes (observações - optional)
 
 2. Detect the date format used (e.g., "dd/MM/yyyy", "yyyy-MM-dd")
@@ -256,55 +255,45 @@ Respond ONLY with valid JSON in this exact format:
 }`;
 
       try {
-        console.log(`[analyze-csv][${traceId}] Calling Gemini for column mapping...`);
+        console.log(`[analyze-csv][${traceId}] Calling Manus for column mapping...`);
         const aiStartTime = Date.now();
 
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-        const aiResponse = await fetch(geminiUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ role: "user", parts: [{ text: aiPrompt }] }],
-            systemInstruction: { parts: [{ text: "You are a CSV analysis expert for Brazilian bank statements. Respond only with valid JSON." }] },
-            generationConfig: { temperature: 0.1, maxOutputTokens: 2048 },
-          }),
+        // Use Manus AI provider
+        const { generateText } = await import("../_shared/manusProvider.ts");
+        const result = await generateText({
+          prompt: aiPrompt,
+          systemInstruction: "You are a CSV analysis expert for Brazilian bank statements. Respond only with valid JSON.",
+          temperature: 0.1,
+          maxTokens: 2048,
         });
 
         const aiDuration = Date.now() - aiStartTime;
-        console.log(`[analyze-csv][${traceId}] Gemini response: status=${aiResponse.status}, duration=${aiDuration}ms`);
+        console.log(`[analyze-csv][${traceId}] Manus response: duration=${aiDuration}ms`);
 
-        if (aiResponse.ok) {
-          const aiData = await aiResponse.json();
-          const aiContent = aiData.candidates?.[0]?.content?.parts
-            ?.map((p: any) => p.text).filter(Boolean).join("") || "";
-          
-          const jsonMatch = aiContent.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            try {
-              const aiAnalysis = JSON.parse(jsonMatch[0]);
-              dateFormat = aiAnalysis.dateFormat || "dd/MM/yyyy";
-              
-              columnMappings = (aiAnalysis.mappings || [])
-                .filter((m: any) => !emptyColumns.has(m.csvIndex))
-                .map((m: any) => ({
-                  csvColumn: headers[m.csvIndex] || `Coluna ${m.csvIndex + 1}`,
-                  csvIndex: m.csvIndex,
-                  internalField: m.internalField,
-                  confidence: m.confidence,
-                }));
-              console.log(`[analyze-csv][${traceId}] Gemini mapped ${columnMappings.length} columns`);
-            } catch (parseErr) {
-              console.error(`[analyze-csv][${traceId}] Failed to parse Gemini JSON response:`, parseErr);
-            }
-          } else {
-            console.warn(`[analyze-csv][${traceId}] Gemini response did not contain valid JSON`);
+        const aiContent = result.text || "";
+        const jsonMatch = aiContent.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          try {
+            const aiAnalysis = JSON.parse(jsonMatch[0]);
+            dateFormat = aiAnalysis.dateFormat || "dd/MM/yyyy";
+            
+            columnMappings = (aiAnalysis.mappings || [])
+              .filter((m: any) => !emptyColumns.has(m.csvIndex))
+              .map((m: any) => ({
+                csvColumn: headers[m.csvIndex] || `Coluna ${m.csvIndex + 1}`,
+                csvIndex: m.csvIndex,
+                internalField: m.internalField,
+                confidence: m.confidence,
+              }));
+            console.log(`[analyze-csv][${traceId}] Manus mapped ${columnMappings.length} columns`);
+          } catch (parseErr) {
+            console.error(`[analyze-csv][${traceId}] Failed to parse Manus JSON response:`, parseErr);
           }
         } else {
-          const errText = await aiResponse.text();
-          console.error(`[analyze-csv][${traceId}] Gemini API error ${aiResponse.status}: ${errText.substring(0, 200)}`);
+          console.warn(`[analyze-csv][${traceId}] Manus response did not contain valid JSON`);
         }
       } catch (aiError) {
-        console.error(`[analyze-csv][${traceId}] Gemini API error, falling back to rules:`, aiError);
+        console.error(`[analyze-csv][${traceId}] Manus API error, falling back to rules:`, aiError);
       }
     }
     
@@ -484,7 +473,6 @@ function detectWithRules(
     } else if (categoryPatterns.some(p => h.includes(p))) {
       columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: "category", confidence: 0.8 });
     } else if (paymentPatterns.some(p => h.includes(p))) {
-      columnMappings.push({ csvColumn: headers[i], csvIndex: i, internalField: "payment_method", confidence: 0.8 });
     }
   }
 

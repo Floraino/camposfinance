@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { ChevronRight, Moon, Bell, Shield, Users, Download, Upload, HelpCircle, LogOut, User, Camera, X, Loader2, Crown, Home, Wallet, RefreshCw, Split, Zap, Target, AlertTriangle, CreditCard, Smartphone } from "lucide-react";
+import { ChevronRight, Moon, Bell, Shield, Users, Download, Upload, HelpCircle, LogOut, User, Camera, X, Loader2, Crown, Home, Wallet, RefreshCw, Split, Zap, Target, Tag, AlertTriangle, CreditCard, Smartphone } from "lucide-react";
 import { MobileLayout } from "@/components/layout/MobileLayout";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,7 @@ import { ProBadge, ProIndicator } from "@/components/paywall/ProBadge";
 import { HouseholdSwitcher } from "@/components/household/HouseholdSwitcher";
 import { CategorizationRulesSheet } from "@/components/settings/CategorizationRulesSheet";
 import { CategoryBudgetsSheet } from "@/components/settings/CategoryBudgetsSheet";
+import { HouseholdCategoriesSheet } from "@/components/settings/HouseholdCategoriesSheet";
 
 export default function Settings() {
   const { profile, user, signOut } = useAuth();
@@ -51,6 +52,7 @@ export default function Settings() {
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [showCategorizationRules, setShowCategorizationRules] = useState(false);
   const [showCategoryBudgets, setShowCategoryBudgets] = useState(false);
+  const [showHouseholdCategories, setShowHouseholdCategories] = useState(false);
   const [upgradeFeature, setUpgradeFeature] = useState<"CSV_IMPORT" | "DATA_EXPORT">("CSV_IMPORT");
   
   const [displayName, setDisplayName] = useState(profile?.display_name || "");
@@ -493,6 +495,21 @@ export default function Settings() {
             </h3>
             <div className="glass-card divide-y divide-border overflow-hidden">
               <button 
+                onClick={() => setShowHouseholdCategories(true)}
+                className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors"
+              >
+                <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
+                  <Tag className="w-5 h-5 text-muted-foreground" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-foreground">Categorias da família</p>
+                  <p className="text-sm text-muted-foreground truncate">
+                    Criar e editar categorias personalizadas
+                  </p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-muted-foreground" />
+              </button>
+              <button 
                 onClick={() => setShowCategorizationRules(true)}
                 className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/50 transition-colors"
               >
@@ -884,6 +901,11 @@ export default function Settings() {
           <CategoryBudgetsSheet 
             isOpen={showCategoryBudgets} 
             onClose={() => setShowCategoryBudgets(false)}
+            householdId={currentHousehold.id}
+          />
+          <HouseholdCategoriesSheet 
+            isOpen={showHouseholdCategories} 
+            onClose={() => setShowHouseholdCategories(false)}
             householdId={currentHousehold.id}
           />
         </>

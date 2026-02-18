@@ -58,7 +58,6 @@ export async function getUncategorizedTransactions(householdId: string): Promise
   return (data || []).map(tx => ({
     ...tx,
     category: tx.category as CategoryType,
-    payment_method: tx.payment_method as "pix" | "boleto" | "card" | "cash",
     status: tx.status as "paid" | "pending",
   }));
 }
@@ -100,7 +99,6 @@ export async function getDuplicateTransactions(householdId: string): Promise<Tra
       duplicateGroups.push(group.map(tx => ({
         ...tx,
         category: tx.category as CategoryType,
-        payment_method: tx.payment_method as "pix" | "boleto" | "card" | "cash",
         status: tx.status as "paid" | "pending",
       })));
     }
@@ -211,7 +209,7 @@ export async function getPendingBills(householdId: string): Promise<PendingItem[
   // Overdue bills
   const { data: overdue, error: errOverdue } = await supabase
     .from("transactions")
-    .select("id, description, amount, due_date, payment_method")
+    .select("id, description, amount, due_date")
     .eq("household_id", householdId)
     .eq("status", "pending")
     .not("due_date", "is", null)
@@ -239,7 +237,7 @@ export async function getPendingBills(householdId: string): Promise<PendingItem[
   // Upcoming bills (next 7 days)
   const { data: upcoming, error: errUpcoming } = await supabase
     .from("transactions")
-    .select("id, description, amount, due_date, payment_method")
+    .select("id, description, amount, due_date")
     .eq("household_id", householdId)
     .eq("status", "pending")
     .not("due_date", "is", null)

@@ -13,6 +13,8 @@ import {
   Wifi,
   type LucideIcon,
 } from "lucide-react";
+import { getCategoryDisplay } from "@/lib/categoryResolvers";
+import type { HouseholdCategory } from "@/services/householdCategoriesService";
 
 export type CategoryType =
   | "bills"
@@ -91,10 +93,13 @@ export const billSubcategories = [
 ];
 
 interface CategoryBadgeProps {
-  category: CategoryType;
+  /** Categoria fixa (bills, food, ...) ou custom (custom:<uuid>) */
+  category: CategoryType | string;
   size?: "sm" | "md" | "lg";
   showLabel?: boolean;
   className?: string;
+  /** Necessário quando category for custom:<uuid> para exibir nome/cor */
+  customCategories?: HouseholdCategory[];
 }
 
 export function CategoryBadge({
@@ -102,70 +107,73 @@ export function CategoryBadge({
   size = "md",
   showLabel = true,
   className,
+  customCategories,
 }: CategoryBadgeProps) {
-  const config = categoryConfig[category];
+  const config = getCategoryDisplay(category, customCategories);
   const Icon = config.icon;
-
+  const iconSizes = { sm: "w-3 h-3", md: "w-4 h-4", lg: "w-5 h-5" };
   const sizeClasses = {
     sm: "px-2 py-0.5 text-xs",
     md: "px-3 py-1.5 text-xs",
     lg: "px-4 py-2 text-sm",
   };
-
-  const iconSizes = {
-    sm: "w-3 h-3",
-    md: "w-4 h-4",
-    lg: "w-5 h-5",
-  };
+  const style = config.hexColor
+    ? { backgroundColor: `${config.hexColor}20`, color: config.hexColor }
+    : undefined;
 
   return (
     <span
       className={cn(
-        "category-badge",
-        config.bgClass,
-        config.colorClass,
+        "category-badge inline-flex items-center gap-1",
+        !config.hexColor && config.bgClass,
+        !config.hexColor && config.colorClass,
         sizeClasses[size],
         className
       )}
+      style={style}
     >
-      <Icon className={iconSizes[size]} />
+      {config.iconUrl ? (
+        <img src={config.iconUrl} alt="" className={cn(iconSizes[size], "rounded-full object-cover")} />
+      ) : (
+        <Icon className={iconSizes[size]} />
+      )}
       {showLabel && config.label}
     </span>
   );
 }
 
 interface CategoryIconProps {
-  category: CategoryType;
+  category: CategoryType | string;
   size?: "sm" | "md" | "lg";
   className?: string;
+  customCategories?: HouseholdCategory[];
 }
 
-export function CategoryIcon({ category, size = "md", className }: CategoryIconProps) {
-  const config = categoryConfig[category];
+export function CategoryIcon({ category, size = "md", className, customCategories }: CategoryIconProps) {
+  const config = getCategoryDisplay(category, customCategories);
   const Icon = config.icon;
-
-  const containerSizes = {
-    sm: "w-8 h-8",
-    md: "w-10 h-10",
-    lg: "w-12 h-12",
-  };
-
-  const iconSizes = {
-    sm: "w-4 h-4",
-    md: "w-5 h-5",
-    lg: "w-6 h-6",
-  };
+  const containerSizes = { sm: "w-8 h-8", md: "w-10 h-10", lg: "w-12 h-12" };
+  const iconSizes = { sm: "w-4 h-4", md: "w-5 h-5", lg: "w-6 h-6" };
+  const style = config.hexColor
+    ? { backgroundColor: `${config.hexColor}20`, color: config.hexColor }
+    : undefined;
 
   return (
     <div
       className={cn(
-        "rounded-xl flex items-center justify-center",
-        config.bgClass,
+        "rounded-xl flex items-center justify-center overflow-hidden",
+        !config.hexColor && config.bgClass,
+        !config.hexColor && config.colorClass,
         containerSizes[size],
         className
       )}
+      style={style}
     >
-      <Icon className={cn(iconSizes[size], config.colorClass)} />
+      {config.iconUrl ? (
+        <img src={config.iconUrl} alt="" className={cn(iconSizes[size], "rounded-full object-cover")} />
+      ) : (
+        <Icon className={cn(iconSizes[size], config.hexColor ? "" : config.colorClass)} />
+      )}
     </div>
   );
 }

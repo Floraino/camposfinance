@@ -43,10 +43,11 @@ Essas operações são restritas por segurança e só podem ser realizadas por:
 
 Posso te ajudar com outras coisas, como gerenciar seus **lançamentos financeiros**! 💰`;
 
-// Category labels for display
+// Category labels for display (fixas). Custom categories merged at runtime per household.
 const categoryLabels: Record<string, string> = {
   food: "Alimentação",
   transport: "Transporte",
+  leisure: "Lazer",
   entertainment: "Lazer",
   health: "Saúde",
   education: "Educação",
@@ -54,6 +55,21 @@ const categoryLabels: Record<string, string> = {
   bills: "Contas Fixas",
   other: "Outros",
 };
+
+async function getCategoryLabelsForHousehold(supabase: any, householdId: string): Promise<Record<string, string>> {
+  const base = { ...categoryLabels };
+  const { data: custom } = await supabase
+    .from("household_categories")
+    .select("id, name")
+    .eq("household_id", householdId)
+    .eq("is_archived", false);
+  if (custom && Array.isArray(custom)) {
+    for (const c of custom) {
+      base[`custom:${c.id}`] = c.name;
+    }
+  }
+  return base;
+}
 
 const monthNames = [
   "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
@@ -72,22 +88,68 @@ function normalizeText(text: string): string {
 // TRANSACTION FUNCTIONS
 // ========================================================================
 
+// Whitelist of valid transaction fields (same as import-csv)
+const VALID_TRANSACTION_FIELDS_CLARA = new Set([
+  "user_id",
+  "household_id",
+  "description",
+  "amount",
+  "category",
+  "status",
+  "transaction_date",
+  "notes",
+  "is_recurring",
+  "account_id",
+  "credit_card_id",
+  "member_id",
+  "due_date",
+  "installment_group_id",
+  "installment_number",
+  "attachments",
+  "created_at",
+  "updated_at",
+  // Explicitly excluded: payment_method (removed from schema)
+]);
+
+function sanitizeTransactionClara(tx: any): Record<string, any> {
+  const sanitized: Record<string, any> = {};
+  
+  for (const [key, value] of Object.entries(tx)) {
+    // Skip payment_method explicitly (even if it somehow got into the object)
+    if (key === 'payment_method' || key === 'paymentMethod') {
+      continue;
+    }
+    if (VALID_TRANSACTION_FIELDS_CLARA.has(key)) {
+      sanitized[key] = value;
+    }
+  }
+  
+  // Final safety check: explicitly delete payment_method if it somehow exists
+  delete sanitized.payment_method;
+  delete sanitized.paymentMethod;
+  return sanitized;
+}
+
 async function addTransaction(supabase: any, userId: string, householdId: string, data: any) {
+  const insertData = {
+    user_id: userId,
+    household_id: householdId,
+    description: data.description,
+    amount: data.amount,
+    category: data.category || "other",
+    status: data.status || "paid",
+    is_recurring: data.is_recurring || false,
+    transaction_date: data.transaction_date || new Date().toISOString().split("T")[0],
+    notes: data.notes,
+    member_id: data.member_id,
+  };
+  
+  // Sanitize to ensure no extra fields (e.g., payment_method) are included
+  const sanitizedData = sanitizeTransactionClara(insertData);
+  
   const { data: tx, error } = await supabase
     .from("transactions")
-    .insert({
-      user_id: userId,
-      household_id: householdId,
-      description: data.description,
-      amount: data.amount,
-      category: data.category || "other",
-      payment_method: data.payment_method || "pix",
-      status: data.status || "paid",
-      is_recurring: data.is_recurring || false,
-      transaction_date: data.transaction_date || new Date().toISOString().split("T")[0],
-      notes: data.notes,
-      member_id: data.member_id,
-    })
+    .insert(sanitizedData)
     .select()
     .single();
 
@@ -106,7 +168,6 @@ async function updateTransaction(supabase: any, householdId: string, id: string,
   if (data.description) updates.description = data.description;
   if (data.amount !== undefined) updates.amount = data.amount;
   if (data.category) updates.category = data.category;
-  if (data.payment_method) updates.payment_method = data.payment_method;
   if (data.status) updates.status = data.status;
   if (data.is_recurring !== undefined) updates.is_recurring = data.is_recurring;
   if (data.transaction_date) updates.transaction_date = data.transaction_date;
@@ -128,7 +189,8 @@ async function updateTransaction(supabase: any, householdId: string, id: string,
 // CATEGORIZATION RULES FUNCTIONS
 // ========================================================================
 
-async function createCategorizationRule(supabase: any, userId: string, householdId: string, data: any) {
+async function createCategorizationRule(supabase: any, userId: string, householdId: string, data: any, labels?: Record<string, string>) {
+  const L = labels || categoryLabels;
   const { data: rule, error } = await supabase
     .from("categorization_rules")
     .insert({
@@ -148,7 +210,7 @@ async function createCategorizationRule(supabase: any, userId: string, household
   }
   return { 
     success: true, 
-    message: `✅ Regra criada! Lançamentos contendo "${data.pattern}" serão categorizados como ${categoryLabels[data.category] || data.category}.`,
+    message: `✅ Regra criada! Lançamentos contendo "${data.pattern}" serão categorizados como ${L[data.category] || data.category}.`,
     rule 
   };
 }
@@ -167,7 +229,8 @@ async function listCategorizationRules(supabase: any, householdId: string) {
   return { success: true, rules: rules || [] };
 }
 
-async function applyCategoryToTransactions(supabase: any, householdId: string, pattern: string, category: string) {
+async function applyCategoryToTransactions(supabase: any, householdId: string, pattern: string, category: string, labels?: Record<string, string>) {
+  const L = labels || categoryLabels;
   const { data: transactions } = await supabase
     .from("transactions")
     .select("id, description")
@@ -200,7 +263,7 @@ async function applyCategoryToTransactions(supabase: any, householdId: string, p
   return { 
     success: true, 
     count: toUpdate.length, 
-    message: `✅ ${toUpdate.length} lançamento(s) atualizado(s) para categoria ${categoryLabels[category] || category}.`
+    message: `✅ ${toUpdate.length} lançamento(s) atualizado(s) para categoria ${L[category] || category}.`
   };
 }
 
@@ -208,7 +271,8 @@ async function applyCategoryToTransactions(supabase: any, householdId: string, p
 // CATEGORY BUDGETS FUNCTIONS
 // ========================================================================
 
-async function createCategoryBudget(supabase: any, userId: string, householdId: string, data: any) {
+async function createCategoryBudget(supabase: any, userId: string, householdId: string, data: any, labels?: Record<string, string>) {
+  const L = labels || categoryLabels;
   const now = new Date();
   const month = data.month ?? now.getMonth();
   const year = data.year ?? now.getFullYear();
@@ -235,7 +299,7 @@ async function createCategoryBudget(supabase: any, userId: string, householdId: 
     }
     return { 
       success: true, 
-      message: `✅ Meta atualizada! ${categoryLabels[data.category] || data.category}: R$ ${data.amount.toFixed(2)} para ${monthNames[month]}/${year}.`
+      message: `✅ Meta atualizada! ${L[data.category] || data.category}: R$ ${data.amount.toFixed(2)} para ${monthNames[month]}/${year}.`
     };
   }
 
@@ -257,7 +321,7 @@ async function createCategoryBudget(supabase: any, userId: string, householdId: 
 
   return { 
     success: true, 
-    message: `✅ Meta criada! ${categoryLabels[data.category] || data.category}: R$ ${data.amount.toFixed(2)} para ${monthNames[month]}/${year}.`
+    message: `✅ Meta criada! ${L[data.category] || data.category}: R$ ${data.amount.toFixed(2)} para ${monthNames[month]}/${year}.`
   };
 }
 
@@ -313,7 +377,8 @@ async function getCategoryBudgetProgress(supabase: any, householdId: string) {
 // ECONOMY DIAGNOSTIC FUNCTIONS
 // ========================================================================
 
-async function analyzeSpendingTrends(supabase: any, householdId: string) {
+async function analyzeSpendingTrends(supabase: any, householdId: string, labels?: Record<string, string>) {
+  const L = labels ?? categoryLabels;
   const now = new Date();
   const results: any = {
     currentMonth: { expenses: 0 },
@@ -407,7 +472,7 @@ async function analyzeSpendingTrends(supabase: any, householdId: string) {
   // Category analysis
   Object.entries(results.byCategory).forEach(([cat, data]: [string, any]) => {
     if (data.lastMonth > 0 && data.currentMonth > data.lastMonth * 1.3) {
-      insights.push(`⚠️ **${categoryLabels[cat] || cat}** aumentou ${((data.currentMonth / data.lastMonth - 1) * 100).toFixed(0)}% este mês.`);
+      insights.push(`⚠️ **${L[cat] || cat}** aumentou ${((data.currentMonth / data.lastMonth - 1) * 100).toFixed(0)}% este mês.`);
     }
   });
 
@@ -425,7 +490,7 @@ async function analyzeSpendingTrends(supabase: any, householdId: string) {
   if (topCategories.length > 0) {
     const [topCat, topData] = topCategories[0] as [string, any];
     if (topData.currentMonth > results.currentMonth.expenses * 0.4) {
-      insights.push(`💡 **${categoryLabels[topCat] || topCat}** representa ${((topData.currentMonth / results.currentMonth.expenses) * 100).toFixed(0)}% dos seus gastos. Considere definir uma meta para esta categoria.`);
+      insights.push(`💡 **${L[topCat] || topCat}** representa ${((topData.currentMonth / results.currentMonth.expenses) * 100).toFixed(0)}% dos seus gastos. Considere definir uma meta para esta categoria.`);
     }
   }
 
@@ -488,7 +553,8 @@ async function getPendingItems(supabase: any, householdId: string) {
 // PREVIEW DELETION
 // ========================================================================
 
-async function previewDeletion(supabase: any, householdId: string, filters: any) {
+async function previewDeletion(supabase: any, householdId: string, filters: any, labels?: Record<string, string>) {
+  const L = labels ?? categoryLabels;
   if (filters.transactionIds && filters.transactionIds.length > 0) {
     const { data: transactions, error } = await supabase
       .from("transactions")
@@ -513,7 +579,7 @@ async function previewDeletion(supabase: any, householdId: string, filters: any)
         date: t.transaction_date,
         amount: t.amount,
         description: t.description,
-        category: categoryLabels[t.category] || t.category,
+        category: L[t.category] || t.category,
       })),
       message: txList.length > 0 ? `Encontrado(s) ${txList.length} lançamento(s).` : "Nenhum encontrado.",
       filterType: "specific",
@@ -532,7 +598,7 @@ async function previewDeletion(supabase: any, householdId: string, filters: any)
 
   if (filters.category) {
     query = query.eq("category", filters.category);
-    labelParts.push(`categoria ${categoryLabels[filters.category] || filters.category}`);
+    labelParts.push(`categoria ${L[filters.category] || filters.category}`);
   }
 
   const { data: transactions, error } = await query;
@@ -554,7 +620,7 @@ async function previewDeletion(supabase: any, householdId: string, filters: any)
 
   const categoryCount: Record<string, number> = {};
   txList.forEach((t: any) => {
-    const cat = categoryLabels[t.category] || t.category;
+    const cat = L[t.category] || t.category;
     categoryCount[cat] = (categoryCount[cat] || 0) + 1;
   });
 
@@ -564,7 +630,7 @@ async function previewDeletion(supabase: any, householdId: string, filters: any)
     date: t.transaction_date,
     amount: t.amount,
     description: t.description,
-    category: categoryLabels[t.category] || t.category,
+    category: L[t.category] || t.category,
   }));
 
   return { success: true, count: txList.length, transactionIds, sumAmount, rangeLabel, topCategories, sample, message: txList.length > 0 ? `Encontrado(s) ${txList.length} lançamento(s).` : "Nenhum encontrado.", filterType: labelParts.length > 1 ? "combined" : "all" };
@@ -584,6 +650,93 @@ async function getHouseholdName(supabase: any, householdId: string): Promise<str
   return data?.name || "Família";
 }
 
+// Normalize category to app schema (entertainment → leisure)
+const CATEGORY_ALIAS: Record<string, string> = {
+  entertainment: "leisure",
+  lazer: "leisure",
+  contas: "bills",
+};
+const VALID_CATEGORIES = new Set(["food", "transport", "bills", "health", "education", "shopping", "leisure", "other"]);
+
+function normalizeCategory(cat: string): string {
+  const lower = (cat || "other").toLowerCase().trim();
+  return VALID_CATEGORIES.has(lower) ? lower : (CATEGORY_ALIAS[lower] || "other");
+}
+
+// List uncategorized expenses and get AI suggestions (categorize-transaction batch)
+async function listUncategorizedAndSuggest(
+  supabase: any,
+  householdId: string,
+  authHeader: string,
+  options: { from?: string; to?: string; limit?: number } = {}
+): Promise<{ transactions: any[]; suggestions: any[]; error?: string }> {
+  const limit = Math.min(options.limit ?? 50, 50);
+  const toDate = options.to ? new Date(options.to) : new Date();
+  const fromDate = options.from ? new Date(options.from) : new Date(toDate.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const fromStr = fromDate.toISOString().split("T")[0];
+  const toStr = toDate.toISOString().split("T")[0];
+
+  const { data: transactions, error } = await supabase
+    .from("transactions")
+    .select("id, description, amount, transaction_date")
+    .eq("household_id", householdId)
+    .lt("amount", 0)
+    .or("category.is.null,category.eq.other,category.eq.uncategorized")
+    .gte("transaction_date", fromStr)
+    .lte("transaction_date", toStr)
+    .order("transaction_date", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    return { transactions: [], suggestions: [], error: error.message };
+  }
+  const list = transactions || [];
+  if (list.length === 0) {
+    return { transactions: [], suggestions: [] };
+  }
+
+  const descriptions = list.map((t: any) => ({ id: t.id, description: t.description || "" }));
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  if (!supabaseUrl) {
+    return { transactions: list, suggestions: [], error: "SUPABASE_URL not set" };
+  }
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
+  const res = await fetch(`${supabaseUrl}/functions/v1/categorize-transaction`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": authHeader,
+      "apikey": anonKey || "",
+    },
+    body: JSON.stringify({ categorizeAll: true, descriptions }),
+  });
+  let categories: Array<{ id: string; category: string; confidence?: number }> = [];
+  if (res.ok) {
+    try {
+      const body = await res.json();
+      categories = body.categories || [];
+    } catch (_e) {
+      /* ignore */
+    }
+  }
+
+  const suggestions = list.map((t: any) => {
+    const sug = categories.find((c: any) => c.id === t.id);
+    const category = normalizeCategory(sug?.category || "other");
+    const confidence = typeof sug?.confidence === "number" ? sug.confidence : 0.5;
+    return {
+      transaction_id: t.id,
+      description: t.description || "",
+      amount: t.amount,
+      date: t.transaction_date,
+      category,
+      confidence,
+      reason: confidence >= 0.6 ? "" : "Revisar",
+    };
+  });
+  return { transactions: list, suggestions };
+}
+
 // ========================================================================
 // AI TOOLS - ENHANCED WITH ACTIONS & DIAGNOSTICS
 // ========================================================================
@@ -600,7 +753,6 @@ const aiTools = [
           description: { type: "string", description: "Descrição do lançamento" },
           amount: { type: "number", description: "Valor em reais (sempre negativo para despesa)" },
           category: { type: "string", enum: ["food", "transport", "entertainment", "health", "education", "shopping", "bills", "other"] },
-          payment_method: { type: "string", enum: ["pix", "boleto", "card", "cash"] },
           status: { type: "string", enum: ["paid", "pending"] },
           transaction_date: { type: "string", description: "Data YYYY-MM-DD" },
           notes: { type: "string" },
@@ -756,12 +908,12 @@ serve(async (req) => {
   }
 
   try {
-    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
-    if (!GEMINI_API_KEY) {
+    const MANUS_API_KEY = Deno.env.get("MANUS_API_KEY");
+    if (!MANUS_API_KEY) {
       return new Response(JSON.stringify({
         error: "Assistente Odin não configurado",
         code: "AI_NOT_CONFIGURED",
-        details: "GEMINI_API_KEY não está definida. Configure em: Supabase Dashboard → Edge Functions → Secrets.",
+        details: "MANUS_API_KEY não está definida. Configure em: Supabase Dashboard → Edge Functions → Secrets.",
       }), {
         status: 503,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -832,6 +984,7 @@ serve(async (req) => {
     }
 
     const householdName = await getHouseholdName(supabase, householdId);
+    const fullCategoryLabels = await getCategoryLabelsForHousehold(supabase, householdId);
     const requestId = crypto.randomUUID?.()?.slice(0, 8) || `req-${Date.now()}`;
 
     // Quick action: run tool directly and stream result (no AI placeholder)
@@ -843,6 +996,7 @@ serve(async (req) => {
       maiores_gastos: "top_expenses",
       gasto_fora_padrao: "outlier_expenses",
       orcamento_restante: "budget_remaining",
+      categorizar_sem_categoria: "categorize_uncategorized",
     };
     if (quickAction && QUICK_ACTION_MAP[quickAction]) {
       const actionType = QUICK_ACTION_MAP[quickAction];
@@ -853,7 +1007,7 @@ serve(async (req) => {
       try {
         switch (actionType) {
           case "analyze_spending": {
-            const analysis = await analyzeSpendingTrends(supabase, householdId);
+            const analysis = await analyzeSpendingTrends(supabase, householdId, fullCategoryLabels);
             const insightsMsg = analysis.insights.join("\n");
             const subsMsg = analysis.recurringSubscriptions.length > 0
               ? `\n\n🔄 **Assinaturas Detectadas**:\n${analysis.recurringSubscriptions.map((s: any) => `- ${s.description}: ~R$ ${s.avgAmount.toFixed(2)}/mês`).join("\n")}`
@@ -876,7 +1030,7 @@ serve(async (req) => {
             if (rulesResult.rules.length === 0) {
               result = { success: true, message: "📜 Nenhuma regra automática configurada. Quer criar uma?" };
             } else {
-              const rulesList = rulesResult.rules.map((r: any) => `- "${r.pattern}" → ${categoryLabels[r.category] || r.category} (aplicada ${r.times_applied}x)`).join("\n");
+              const rulesList = rulesResult.rules.map((r: any) => `- "${r.pattern}" → ${fullCategoryLabels[r.category] || r.category} (aplicada ${r.times_applied}x)`).join("\n");
               result = { success: true, message: `\n\n📜 **Regras Automáticas**:\n\n${rulesList}\n` };
             }
             break;
@@ -888,7 +1042,7 @@ serve(async (req) => {
             } else {
               const goalsMsg = goalsResult.budgets.map((b: any) => {
                 const icon = b.status === "exceeded" ? "🚨" : b.status === "warning" ? "⚠️" : "✅";
-                return `${icon} **${categoryLabels[b.category] || b.category}**: R$ ${b.spent.toFixed(2)} / R$ ${b.amount.toFixed(2)} (${b.percentage}%)`;
+                return `${icon} **${fullCategoryLabels[b.category] || b.category}**: R$ ${b.spent.toFixed(2)} / R$ ${b.amount.toFixed(2)} (${b.percentage}%)`;
               }).join("\n");
               result = { success: true, message: `\n\n🎯 **Progresso das Metas**:\n\n${goalsMsg}\n` };
             }
@@ -910,7 +1064,7 @@ serve(async (req) => {
             if (!topTxs || topTxs.length === 0) {
               result = { success: true, message: "Nenhum gasto registrado este mês." };
             } else {
-              const topList = topTxs.map((t: any, i: number) => `${i + 1}. **${t.description}** — R$ ${Math.abs(t.amount).toFixed(2)} (${categoryLabels[t.category] || t.category})`).join("\n");
+              const topList = topTxs.map((t: any, i: number) => `${i + 1}. **${t.description}** — R$ ${Math.abs(t.amount).toFixed(2)} (${fullCategoryLabels[t.category] || t.category})`).join("\n");
               result = { success: true, message: `\n\n💰 **Maiores Gastos do Mês**:\n\n${topList}\n` };
             }
             break;
@@ -942,9 +1096,29 @@ serve(async (req) => {
               if (outliers.length === 0) {
                 result = { success: true, message: "✅ Nenhum gasto fora do padrão detectado!" };
               } else {
-                const outList = outliers.map((t: any) => `- ⚠️ **${t.description}**: R$ ${Math.abs(t.amount).toFixed(2)} (${categoryLabels[t.category] || t.category})`).join("\n");
+                const outList = outliers.map((t: any) => `- ⚠️ **${t.description}**: R$ ${Math.abs(t.amount).toFixed(2)} (${fullCategoryLabels[t.category] || t.category})`).join("\n");
                 result = { success: true, message: `\n\n🔍 **Gastos Fora do Padrão**:\n\n${outList}\n` };
               }
+            }
+            break;
+          }
+          case "categorize_uncategorized": {
+            const householdNameForCat = await getHouseholdName(supabase, householdId);
+            const { transactions: uncatList, suggestions: suggestList, error: catErr } = await listUncategorizedAndSuggest(supabase, householdId, authHeader, { limit: 50 });
+            if (catErr) {
+              result = { success: false, message: `Erro ao buscar sugestões: ${catErr}. Tente novamente.` };
+            } else if (uncatList.length === 0) {
+              result = { success: true, message: "✅ Nenhum gasto sem categoria nos últimos 30 dias. Tudo em ordem!" };
+            } else {
+              const previewPayload = JSON.stringify({
+                householdId,
+                householdName: householdNameForCat,
+                suggestions: suggestList,
+              });
+              result = {
+                success: true,
+                message: `\n\n🏷️ **Categorizar gastos sem categoria**\n\nEncontrei **${uncatList.length}** gasto(s) sem categoria. Revise as sugestões abaixo e confirme para aplicar.\n\n<!-- CATEGORIZE_PREVIEW:${previewPayload} -->`,
+              };
             }
             break;
           }
@@ -1048,20 +1222,20 @@ serve(async (req) => {
 
     const categoryBreakdown = Object.entries(byCategory)
       .sort((a, b) => b[1] - a[1])
-      .map(([cat, amount]) => `- ${categoryLabels[cat] || cat}: R$ ${amount.toFixed(2)}`)
+      .map(([cat, amount]) => `- ${fullCategoryLabels[cat] || cat}: R$ ${amount.toFixed(2)}`)
       .join("\n");
 
     const recentTransactions = transactions.slice(0, 15)
-      .map((t: any) => `- ID: ${t.id} | ${t.description}: R$ ${Math.abs(t.amount).toFixed(2)} (${categoryLabels[t.category] || t.category}) - ${t.transaction_date}`)
+      .map((t: any) => `- ID: ${t.id} | ${t.description}: R$ ${Math.abs(t.amount).toFixed(2)} (${fullCategoryLabels[t.category] || t.category}) - ${t.transaction_date}`)
       .join("\n");
 
     const budgetProgress = (categoryBudgets || []).map((b: any) => {
       const spent = byCategory[b.category] || 0;
       const pct = Math.round((spent / b.amount) * 100);
-      return `- ${categoryLabels[b.category] || b.category}: R$ ${spent.toFixed(2)} / R$ ${b.amount.toFixed(2)} (${pct}%)`;
+      return `- ${fullCategoryLabels[b.category] || b.category}: R$ ${spent.toFixed(2)} / R$ ${b.amount.toFixed(2)} (${pct}%)`;
     }).join("\n");
 
-    const rulesInfo = (categorizationRules || []).map((r: any) => `- "${r.pattern}" → ${categoryLabels[r.category] || r.category}`).join("\n");
+    const rulesInfo = (categorizationRules || []).map((r: any) => `- "${r.pattern}" → ${fullCategoryLabels[r.category] || r.category}`).join("\n");
 
     const uncategorizedCount = transactions.filter((t: any) => t.category === "other").length;
 
@@ -1095,6 +1269,9 @@ ${budgetProgress || "Nenhuma meta definida"}
 📜 REGRAS AUTOMÁTICAS:
 ${rulesInfo || "Nenhuma regra ativa"}
 
+📂 CATEGORIAS VÁLIDAS (use o ID exato em create_categorization_rule e apply_category_now):
+${Object.entries(fullCategoryLabels).map(([id, label]) => `- ${id}: ${label}`).join("\n")}
+
 ⚠️ PENDÊNCIAS:
 ${uncategorizedCount > 0 ? `- ${uncategorizedCount} lançamento(s) sem categoria` : "- Nenhuma pendência"}
 
@@ -1117,7 +1294,7 @@ ${recentTransactions || "Nenhuma transação"}
 11. **list_categorization_rules**: Listar regras
 
 🔥 SEJA PROATIVO! Sugira ações quando apropriado:
-- Se houver lançamentos sem categoria: "Posso criar uma regra automática para categorizar esses?"
+- Se houver lançamentos sem categoria: sugira usar a ação rápida "Categorizar sem categoria" para ver sugestões da IA e aplicar em lote (com confirmação).
 - Se gastos aumentaram: "Quer que eu crie uma meta para controlar?"
 - Se detectar padrões: "Notei gastos recorrentes com X, quer criar uma regra?"
 
@@ -1129,34 +1306,21 @@ ${recentTransactions || "Nenhuma transação"}
 5. Para exclusões, SEMPRE use preview primeiro
 6. SUGIRA ações que podem ajudar o usuário`;
 
-    // Convert messages to Gemini format
-    const geminiContents: any[] = [];
-    for (const msg of messages) {
-      geminiContents.push({
-        role: msg.role === "assistant" ? "model" : "user",
-        parts: [{ text: msg.content }],
+    // Use Manus AI provider for streaming
+    const { generateStream } = await import("../_shared/manusProvider.ts");
+    
+    let response: Response;
+    try {
+      response = await generateStream({
+        messages,
+        systemInstruction: systemPrompt,
+        temperature: 0.7,
       });
-    }
-
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=${GEMINI_API_KEY}`;
-    const response = await fetch(geminiUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: geminiContents,
-        systemInstruction: { parts: [{ text: systemPrompt }] },
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 8192,
-        },
-      }),
-    });
-
-    if (!response.ok) {
-      if (response.status === 429) {
+    } catch (streamError) {
+      if (streamError instanceof Error && streamError.message.includes("RATE_LIMITED")) {
         return new Response(JSON.stringify({ error: "Muitas requisições. Aguarde um momento." }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
-      if (response.status === 402) {
+      if (streamError instanceof Error && streamError.message.includes("INVALID_API_KEY")) {
         return new Response(JSON.stringify({ error: "Limite de uso atingido." }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
       throw new Error("Erro ao conectar com a IA");
@@ -1178,7 +1342,7 @@ ${recentTransactions || "Nenhuma transação"}
 
             const chunk = decoder.decode(value, { stream: true });
 
-            // Parse Gemini SSE events and convert to OpenAI-compatible format
+            // Parse Manus SSE events (already in OpenAI-compatible format)
             const lines = chunk.split("\n");
             for (const line of lines) {
               if (line.startsWith("data: ")) {
@@ -1186,16 +1350,11 @@ ${recentTransactions || "Nenhuma transação"}
                 if (!payload || payload === "[DONE]") continue;
                 try {
                   const json = JSON.parse(payload);
-                  const textParts = json.candidates?.[0]?.content?.parts || [];
-                  for (const part of textParts) {
-                    if (part.text) {
-                      fullResponseText += part.text;
-                      // Emit in OpenAI-compatible SSE format for the frontend
-                      const openaiEvent = JSON.stringify({
-                        choices: [{ delta: { content: part.text } }],
-                      });
-                      controller.enqueue(encoder.encode(`data: ${openaiEvent}\n\n`));
-                    }
+                  const content = json.choices?.[0]?.delta?.content;
+                  if (content) {
+                    fullResponseText += content;
+                    // Already in OpenAI-compatible format
+                    controller.enqueue(encoder.encode(`data: ${payload}\n\n`));
                   }
                 } catch { /* ignore parse errors in stream */ }
               }
@@ -1239,7 +1398,7 @@ ${recentTransactions || "Nenhuma transação"}
                 break;
 
               case "search_transactions":
-                const searchResult = await previewDeletion(supabase, householdId, args);
+                const searchResult = await previewDeletion(supabase, householdId, args, fullCategoryLabels);
                 if (searchResult.success && searchResult.count > 0) {
                   const limit = args.limit || 10;
                   const sampleList = searchResult.sample.slice(0, limit)
@@ -1258,7 +1417,7 @@ ${recentTransactions || "Nenhuma transação"}
                   controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: `\n\n⚠️ Especifique filtros para evitar apagar tudo!\n` } }] })}\n\n`));
                   continue;
                 }
-                const preview = await previewDeletion(supabase, householdId, args);
+                const preview = await previewDeletion(supabase, householdId, args, fullCategoryLabels);
                 if (preview.success && preview.count > 0) {
                   const samplePreview = preview.sample.slice(0, 5).map((t: any) => `- ${t.date} | ${t.description}: R$ ${Math.abs(t.amount).toFixed(2)}`).join("\n");
                   const previewMsg = `\n\n🔒 **Modo de Segurança**\n\n**${preview.count} lançamento(s)** (${preview.rangeLabel})\n💰 Total: R$ ${preview.sumAmount.toFixed(2)}\n\n${samplePreview}\n\n⚠️ Ação irreversível. Clique no botão abaixo para confirmar.\n\n<!-- DELETION_PREVIEW:${JSON.stringify({ count: preview.count, transactionIds: preview.transactionIds, sumAmount: preview.sumAmount, rangeLabel: preview.rangeLabel, topCategories: preview.topCategories, householdId, householdName })} -->`;
@@ -1269,15 +1428,15 @@ ${recentTransactions || "Nenhuma transação"}
                 continue;
 
               case "create_categorization_rule":
-                result = await createCategorizationRule(supabase, user.id, householdId, args);
+                result = await createCategorizationRule(supabase, user.id, householdId, args, fullCategoryLabels);
                 break;
 
               case "apply_category_now":
-                result = await applyCategoryToTransactions(supabase, householdId, args.pattern, args.category);
+                result = await applyCategoryToTransactions(supabase, householdId, args.pattern, args.category, fullCategoryLabels);
                 break;
 
               case "create_category_goal":
-                result = await createCategoryBudget(supabase, user.id, householdId, args);
+                result = await createCategoryBudget(supabase, user.id, householdId, args, fullCategoryLabels);
                 break;
 
               case "check_goals_progress":
@@ -1287,14 +1446,14 @@ ${recentTransactions || "Nenhuma transação"}
                 } else {
                   const goalsMsg = goalsResult.budgets.map((b: any) => {
                     const icon = b.status === "exceeded" ? "🚨" : b.status === "warning" ? "⚠️" : "✅";
-                    return `${icon} **${categoryLabels[b.category] || b.category}**: R$ ${b.spent.toFixed(2)} / R$ ${b.amount.toFixed(2)} (${b.percentage}%)`;
+                    return `${icon} **${fullCategoryLabels[b.category] || b.category}**: R$ ${b.spent.toFixed(2)} / R$ ${b.amount.toFixed(2)} (${b.percentage}%)`;
                   }).join("\n");
                   result = { success: true, message: `\n\n🎯 **Progresso das Metas**:\n\n${goalsMsg}\n` };
                 }
                 break;
 
               case "analyze_spending":
-                const analysis = await analyzeSpendingTrends(supabase, householdId);
+                const analysis = await analyzeSpendingTrends(supabase, householdId, fullCategoryLabels);
                 const insightsMsg = analysis.insights.join("\n");
                 const subsMsg = analysis.recurringSubscriptions.length > 0
                   ? `\n\n🔄 **Assinaturas Detectadas**:\n${analysis.recurringSubscriptions.map((s: any) => `- ${s.description}: ~R$ ${s.avgAmount.toFixed(2)}/mês`).join("\n")}`
@@ -1317,7 +1476,7 @@ ${recentTransactions || "Nenhuma transação"}
                 if (rulesResult.rules.length === 0) {
                   result = { success: true, message: "📜 Nenhuma regra automática configurada. Quer criar uma?" };
                 } else {
-                  const rulesList = rulesResult.rules.map((r: any) => `- "${r.pattern}" → ${categoryLabels[r.category] || r.category} (aplicada ${r.times_applied}x)`).join("\n");
+                  const rulesList = rulesResult.rules.map((r: any) => `- "${r.pattern}" → ${fullCategoryLabels[r.category] || r.category} (aplicada ${r.times_applied}x)`).join("\n");
                   result = { success: true, message: `\n\n📜 **Regras Automáticas**:\n\n${rulesList}\n` };
                 }
                 break;

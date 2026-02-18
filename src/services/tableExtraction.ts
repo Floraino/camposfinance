@@ -40,10 +40,10 @@ export interface ExtractResult {
   error?: string;
 }
 
-/** Tokens que identificam colunas de extrato bancário (case-insensitive, tolerante a acentos) */
+/** Tokens que identificam colunas de extrato bancário (case-insensitive, tolerante a acentos). Itaú/Santander: movimento, texto. */
 const HEADER_TOKENS = [
-  "data", "descri", "hist", "lançamento", "lancamento", "docto", "documento",
-  "situação", "situacao", "credito", "crédito", "debito", "débito",
+  "data", "dt", "descri", "hist", "lançamento", "lancamento", "movimento", "texto",
+  "docto", "documento", "situação", "situacao", "credito", "crédito", "debito", "débito",
   "entrada", "saida", "saída", "valor", "saldo", "historico", "histórico",
 ];
 
@@ -266,8 +266,8 @@ function detectColumnTypes(headerRow: string[], colIndices: number[]): {
     const c = colIndices[idx];
     const label = normalizeString(String(headerRow[c] ?? ""));
 
-    if (/^data|^dt$|^dia$|moviment/i.test(label)) dateCol = c;
-    else if (/descri|hist|lan[cç]amento|estabelecimento|nome/i.test(label)) descCol = c;
+    if (/^data|^dt$|^dia$|moviment|movimento/i.test(label)) dateCol = c;
+    else if (/descri|hist|lan[cç]amento|estabelecimento|nome|texto/i.test(label)) descCol = c;
     else if (/credito|cr[eé]dito|entrada/i.test(label) || /debito|d[eé]bito|sa[ií]da/i.test(label) || /valor|valor\s*\(/i.test(label)) {
       amountCols.push(c);
     }

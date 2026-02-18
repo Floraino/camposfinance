@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  detectXlsFormat,
   isSupportedFile,
   normalizeTxtToCsv,
   parseFileToCsvContent,
@@ -186,6 +187,29 @@ describe("TXT integrado ao pipeline parseCSVWithMappings", () => {
 });
 
 // =============================================
+// 4b) Detecção .xls HTML vs BIFF (extratos Itaú/Santander)
+// =============================================
+describe("detectXlsFormat", () => {
+  it("detecta HTML quando .xls começa com <html", () => {
+    const html = "<html><body><table><tr><td>Data</td><td>Valor</td></tr></table></body></html>";
+    const buf = new TextEncoder().encode(html).buffer;
+    expect(detectXlsFormat(buf)).toBe("html");
+  });
+
+  it("detecta HTML quando contém <table", () => {
+    const html = "  \r\n <table><tr><td>Data</td></tr></table>";
+    const buf = new TextEncoder().encode(html).buffer;
+    expect(detectXlsFormat(buf)).toBe("html");
+  });
+
+  it("detecta BIFF quando não é HTML (magic bytes .xls)", () => {
+    // BIFF8 começa com D0 CF 11 E0 (OLE) ou 09 00 (BIFF2)
+    const biff = new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb2, 0x00]);
+    expect(detectXlsFormat(biff.buffer)).toBe("biff");
+  });
+});
+
+// =============================================
 // 5) XLS/XLSX integrado ao pipeline
 // =============================================
 describe("XLS integrado ao pipeline", () => {
@@ -214,5 +238,37 @@ describe("XLS integrado ao pipeline", () => {
     expect(okRows[0].parsed?.description).toBe("Supermercado");
     expect(okRows[0].parsed?.amount).toBe(-150);
     expect(okRows[0].parsed?.type).toBe("EXPENSE");
+  });
+
+  it("XLS como HTML (estilo Itaú/Santander): extrai tabela e bank_account: débito importado, crédito ignorado", async () => {
+    const html = [
+      "<html><head><meta charset=\"utf-8\"/></head><body><table>",
+      "<tr><td>Data</td><td>Histórico</td><td>Débito (R$)</td><td>Crédito (R$)</td></tr>",
+      "<tr><td>10/02/2026</td><td>PIX Saída</td><td>100,00</td><td></td></tr>",
+      "<tr><td>11/02/2026</td><td>TED Recebida</td><td></td><td>200,00</td></tr>",
+      "</table></body></html>",
+    ].join("");
+    const file = createTestFile(html, "itauExtrato.xls", "application/vnd.ms-excel");
+    const { content, format, extracted } = await parseFileToCsvContent(file);
+    expect(format).toBe("xls");
+    expect(extracted).toBe(true);
+    expect(content).toContain("Data");
+    expect(content).toContain("Histórico");
+    expect(content).toContain("PIX Saída");
+    expect(content).toContain("TED Recebida");
+    const mappings: ColumnMapping[] = [
+      { csvColumn: "Data", csvIndex: 0, internalField: "date", confidence: 0.95 },
+      { csvColumn: "Histórico", csvIndex: 1, internalField: "description", confidence: 0.95 },
+      { csvColumn: "Débito (R$)", csvIndex: 2, internalField: "debito", confidence: 0.95 },
+      { csvColumn: "Crédito (R$)", csvIndex: 3, internalField: "credito", confidence: 0.95 },
+    ];
+    const rows = parseCSVWithMappings(content, mappings, ";", true, "dd/MM/yyyy", false, "bank_account");
+    const okRow = rows.find((r) => r.parsed?.description?.includes("PIX") || r.status === "OK");
+    const ignoredRows = rows.filter((r) => (r.reason ?? "").includes("Entrada ignorada"));
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    expect(okRow?.status).toBe("OK");
+    expect(okRow?.parsed?.amount).toBeLessThan(0);
+    expect(ignoredRows.length).toBeGreaterThanOrEqual(1);
+    expect(ignoredRows.some((r) => (r.reason ?? "").includes("conta corrente"))).toBe(true);
   });
 });

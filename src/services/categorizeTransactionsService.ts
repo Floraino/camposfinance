@@ -13,6 +13,7 @@ import {
   type TxInput,
 } from "./categorizationEngineLocal";
 import { ALLOWED_CATEGORIES, isValidCategory } from "./categorizationEngine";
+import { getHouseholdCategories, CUSTOM_CATEGORY_PREFIX } from "./householdCategoriesService";
 
 const AI_BATCH_SIZE = 80;
 const LOCAL_CONFIDENCE_THRESHOLD = 0.85;
@@ -181,6 +182,10 @@ export async function categorizeTransactionsService(
       batches.push(remaining.slice(i, i + AI_BATCH_SIZE));
     }
 
+    const customCats = await getHouseholdCategories(familyId, { includeArchived: false });
+    const customValues = customCats.map((c) => `${CUSTOM_CATEGORY_PREFIX}${c.id}`);
+    const allowedCategories = [...ALLOWED_CATEGORIES, ...customValues];
+
     let aiErrorReported = false;
     for (const batch of batches) {
       result.sentToAI += batch.length;
@@ -191,7 +196,7 @@ export async function categorizeTransactionsService(
             body: {
               categorizeAll: true,
               descriptions: batch.map((t) => ({ id: t.id, description: t.description })),
-              allowedCategories: ALLOWED_CATEGORIES,
+              allowedCategories,
             },
           }
         );
@@ -211,8 +216,10 @@ export async function categorizeTransactionsService(
 
         for (const c of categories) {
           if (!c?.id || !c.category) continue;
-          const category = String(c.category).toLowerCase();
-          if (!isValidCategory(category)) continue;
+          const category = String(c.category);
+          const categoryLower = category.toLowerCase();
+          const valid = isValidCategory(categoryLower) || category.startsWith(CUSTOM_CATEGORY_PREFIX);
+          if (!valid) continue;
           const confidence = Number(c.confidence) ?? 0.85;
           if (confidence >= LOCAL_CONFIDENCE_THRESHOLD) {
             toApply.push({ id: c.id, category, confidence });

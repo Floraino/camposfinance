@@ -11,6 +11,8 @@ import {
 } from "@/services/categorizationEngine";
 import { getCategorizationRules } from "@/services/categorizationRulesService";
 import { getCacheByFingerprints, setCacheBatch } from "@/services/merchantCategoryCacheService";
+import { getHouseholdCategories, CUSTOM_CATEGORY_PREFIX } from "@/services/householdCategoriesService";
+import { getCategoryLabelsForApi } from "@/lib/categoryResolvers";
 
 /**
  * Categorize a single description using the edge function.
@@ -108,7 +110,7 @@ export interface RunCategorizationResult {
   byCache: number;
   byAi: number;
   aiUnavailable?: boolean;
-  suggestions?: Array<{ id: string; description: string; category: CategoryType; confidence: number }>;
+  suggestions?: Array<{ id: string; description: string; category: string; confidence: number }>;
   errors: string[];
 }
 
@@ -169,7 +171,7 @@ export async function runCategorizationPipeline(
   }
 
   onProgress?.("Aplicando histórico…");
-  let cacheMap = new Map<string, CategoryType>();
+  let cacheMap = new Map<string, string>();
   try {
     const fingerprints = txs.map((t) => merchantFingerprint(t.description));
     cacheMap = await getCacheByFingerprints(householdId, fingerprints);
@@ -198,20 +200,25 @@ export async function runCategorizationPipeline(
   result.byCache = toApply.filter((a) => a.source === "cache").length + toSuggest.filter((a) => a.source === "cache").length;
 
   let aiResults: Array<{ id: string; category: string; confidence: number }> = [];
-  if (forAi.length > 0) {
+  if (forAi.length > 0 && householdId) {
     onProgress?.("Consultando IA…");
     try {
+      const customCats = await getHouseholdCategories(householdId, { includeArchived: false });
+      const customValues = customCats.map((c) => `${CUSTOM_CATEGORY_PREFIX}${c.id}`);
+      const allowedCategories = [...ALLOWED_CATEGORIES, ...customValues];
+      const categoryLabels = getCategoryLabelsForApi(customCats);
       const { data: aiData, error: aiError } = await supabase.functions.invoke("categorize-transaction", {
         body: {
           categorizeAll: true,
           descriptions: forAi.map((t) => ({ id: t.id, description: t.description })),
-          allowedCategories: ALLOWED_CATEGORIES,
+          allowedCategories,
+          categoryLabels,
         },
       });
       if (!aiError && aiData?.categories && Array.isArray(aiData.categories)) {
         aiResults = aiData.categories.filter(
           (c: { id: string; category: string; confidence?: number }) =>
-            c.id && c.category && isValidCategory(c.category)
+            c.id && c.category && (isValidCategory(c.category) || c.category.startsWith(CUSTOM_CATEGORY_PREFIX))
         );
       } else {
         result.aiUnavailable = true;
@@ -224,9 +231,9 @@ export async function runCategorizationPipeline(
   for (const c of aiResults) {
     const conf = Number(c.confidence) || 0.5;
     if (conf >= 0.85) {
-      toApply.push({ id: c.id, category: c.category as CategoryType, confidence: conf, source: "ai" });
+      toApply.push({ id: c.id, category: c.category, confidence: conf, source: "ai" });
     } else {
-      toSuggest.push({ id: c.id, category: c.category as CategoryType, confidence: conf, source: "ai" });
+      toSuggest.push({ id: c.id, category: c.category, confidence: conf, source: "ai" });
     }
   }
   result.byAi = toApply.filter((a) => a.source === "ai").length + toSuggest.filter((a) => a.source === "ai").length;

@@ -84,13 +84,12 @@ export function ExportReportSheet({ open, onClose }: ExportReportSheetProps) {
 
       if (selectedFormat === "csv") {
         // Create CSV
-        const headers = ["Data", "Descrição", "Categoria", "Valor", "Método", "Status", "Recorrente", "Notas"];
+        const headers = ["Data", "Descrição", "Categoria", "Valor", "Status", "Recorrente", "Notas"];
         const rows = data.map(t => [
           format(new Date(t.transaction_date), "dd/MM/yyyy"),
           `"${t.description}"`,
           t.category,
           t.amount.toString().replace(".", ","),
-          t.payment_method,
           t.status,
           t.is_recurring ? "Sim" : "Não",
           t.notes ? `"${t.notes}"` : "",
@@ -110,7 +109,6 @@ export function ExportReportSheet({ open, onClose }: ExportReportSheetProps) {
             <td>${t.description}</td>
             <td>${t.category}</td>
             <td style="text-align:right;color:${t.amount < 0 ? '#dc2626' : '#16a34a'}">${formatBRL(t.amount)}</td>
-            <td>${t.payment_method}</td>
             <td>${t.status === "paid" ? "Pago" : "Pendente"}</td>
           </tr>`
         ).join("");
@@ -124,7 +122,7 @@ export function ExportReportSheet({ open, onClose }: ExportReportSheetProps) {
         <div class="summary">
           <div>Total de gastos: <strong style="color:#dc2626">${formatBRL(totalExpenses)}</strong></div>
         </div>
-        <table><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Método</th><th>Status</th></tr></thead>
+        <table><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Status</th></tr></thead>
         <tbody>${rows}</tbody></table>
         <script>window.print();</script></body></html>`;
 

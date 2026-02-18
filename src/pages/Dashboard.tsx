@@ -9,10 +9,10 @@ import { ExpensePieChart, MonthlyBarChart } from "@/components/charts/ExpenseCha
 import { AddTransactionSheet } from "@/components/transactions/AddTransactionSheet";
 import { ReceiptScanner } from "@/components/receipts/ReceiptScanner";
 import { BudgetSheet } from "@/components/settings/BudgetSheet";
-import { type CategoryType } from "@/components/ui/CategoryBadge";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { useHousehold } from "@/hooks/useHousehold";
+import { useHouseholdCategories } from "@/hooks/useHouseholdCategories";
 import { useProFeature } from "@/hooks/useProFeature";
 import { getTransactions, addTransaction, getMonthlyStats, getMonthlyEvolution, type Transaction, type NewTransaction, type MonthlyExpense } from "@/services/transactionService";
 import { getCurrentBudget, type Budget } from "@/services/budgetService";
@@ -30,6 +30,7 @@ export default function Dashboard() {
   const { profile, isLoading: authLoading } = useAuth();
   const { currentHousehold, hasSelectedHousehold, isLoading: householdLoading, planType } = useHousehold();
   const { toast } = useToast();
+  const { categories: customCategories } = useHouseholdCategories(currentHousehold?.id);
   
   // Use centralized PRO feature check for OCR
   const ocrFeature = useProFeature("OCR_SCAN");
@@ -51,7 +52,7 @@ export default function Dashboard() {
   
   const [stats, setStats] = useState({
     totalExpenses: 0,
-    byCategory: {} as Record<CategoryType, number>,
+    byCategory: {} as Record<string, number>,
   });
 
   // Redirect to household selection if no household selected
@@ -135,7 +136,7 @@ export default function Dashboard() {
       if (!response.ok) {
         const err = await response.json().catch(() => ({}));
         if (response.status === 503 && err.code === "AI_NOT_CONFIGURED") {
-          setOdinInsight("Configure GEMINI_API_KEY nas Edge Functions do Supabase para dicas do Odin.");
+          setOdinInsight("Configure MANUS_API_KEY nas Edge Functions do Supabase para dicas do Odin.");
           return;
         }
         throw new Error(err.error || "Failed to fetch insight");
@@ -250,10 +251,7 @@ export default function Dashboard() {
 
   // Prepare pie chart data
   const pieChartData = Object.entries(stats.byCategory)
-    .map(([category, amount]) => ({
-      category: category as CategoryType,
-      amount,
-    }))
+    .map(([category, amount]) => ({ category, amount }))
     .sort((a, b) => b.amount - a.amount);
 
   // Map Transaction to UITransaction
@@ -263,7 +261,6 @@ export default function Dashboard() {
     amount: Number(tx.amount),
     date: tx.transaction_date,
     category: tx.category,
-    paymentMethod: tx.payment_method,
     status: tx.status,
     isRecurring: tx.is_recurring,
     memberName: tx.member_name,
@@ -443,7 +440,7 @@ export default function Dashboard() {
               <h2 className="font-semibold text-foreground">Gastos por Categoria</h2>
               <span className="text-xs text-muted-foreground capitalize">{periodLabel}</span>
             </div>
-            <ExpensePieChart data={pieChartData} />
+            <ExpensePieChart data={pieChartData} customCategories={customCategories} />
           </div>
         )}
 
@@ -491,6 +488,7 @@ export default function Dashboard() {
                   onClick={() => handleTransactionClick(
                     transactions.find(t => t.id === tx.id)!
                   )}
+                  customCategories={customCategories}
                 />
               ))}
             </div>
